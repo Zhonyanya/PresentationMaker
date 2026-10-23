@@ -1,0 +1,172 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import '@fontsource-variable/inter-tight';
+@import '@fontsource-variable/noto-serif-display';
+@import '@fontsource-variable/noto-serif-display/standard-italic.css';
+
+/*
+ * Дизайн-токены ИНТЕРФЕЙСА приложения (редакционный стиль).
+ * Оформление самих презентаций сюда не относится — оно живёт в
+ * src/theme/presentation-theme.ts и используется и в превью, и в PPTX.
+ *
+ * Принципы: тёплая бумажная основа, чернильный чёрный, один акцент,
+ * линии в 1px, антиква в заголовках. Без градиентов, стекла и свечения.
+ * Шрифты подключаются локально — работают в закрытой сети.
+ */
+
+:root {
+  --radius: 0.25rem;
+
+  --background: #f3f0e8;
+  --foreground: #141414;
+  --card: #fbfaf6;
+  --card-foreground: #141414;
+  --popover: #fbfaf6;
+  --popover-foreground: #141414;
+
+  --primary: #141414;
+  --primary-foreground: #f7f5ef;
+  --secondary: #e8e3d7;
+  --secondary-foreground: #141414;
+  --muted: #ece8de;
+  --muted-foreground: #6a655b;
+  --accent: #ebe6da;
+  --accent-foreground: #141414;
+
+  /* Единственный акцент — терракота. Только для мелких деталей. */
+  --brand: #a4452c;
+  --brand-soft: #f1e5dc;
+  --brand-foreground: #8a3622;
+
+  --destructive: #a32020;
+  --destructive-soft: #f6e4e0;
+  --warning: #8a5a12;
+  --warning-soft: #f3ead6;
+  --success: #3f6b4e;
+  --success-soft: #e4ece3;
+
+  --border: #d9d3c5;
+  --input: #cbc4b4;
+  --ring: #141414;
+
+  --canvas: #e6e1d6;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@theme inline {
+  --font-sans: 'Inter Tight Variable', 'Helvetica Neue', Arial, sans-serif;
+  --font-display: 'Noto Serif Display Variable', 'Times New Roman', Georgia, serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-canvas: var(--canvas);
+
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
+
+  --shadow-xs: 0 1px 0 rgb(20 20 20 / 0.04);
+  --shadow-sm: 0 1px 2px rgb(20 20 20 / 0.06);
+  --shadow-md: 0 1px 2px rgb(20 20 20 / 0.05), 0 12px 32px -16px rgb(20 20 20 / 0.25);
+  /* Тень «отпечатка» для слайдов — мягкая, как у листа на столе */
+  --shadow-slide: 0 1px 1px rgb(20 20 20 / 0.05), 0 22px 44px -26px rgb(20 20 20 / 0.45);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/40;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-feature-settings: 'cv11' on, 'ss03' on;
+    letter-spacing: -0.005em;
+  }
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+  ::selection {
+    background: #141414;
+    color: #f7f5ef;
+  }
+}
+
+@layer components {
+  /* Подпись-рубрика: капитель с разрядкой */
+  .eyebrow {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+
+  /* Подчёркивание, которое прорисовывается при наведении */
+  .link-draw {
+    background-image: linear-gradient(currentColor, currentColor);
+    background-size: 0% 1px;
+    background-position: 0 100%;
+    background-repeat: no-repeat;
+    transition: background-size 0.45s var(--ease-out-expo);
+  }
+  .link-draw:hover,
+  .link-draw:focus-visible {
+    background-size: 100% 1px;
+  }
+}
+
+/* Тонкие скроллбары в панелях редактора */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #c9c2b2 transparent;
+}
+
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
