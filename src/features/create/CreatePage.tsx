@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type FormEvent } from 'react'
-import { motion } from 'motion/react'
+import { motion, useReducedMotion, useScroll, useTransform } from 'motion/react'
 import { ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
 import { generateRequestSchema, LIMITS } from '@/domain/presentation'
@@ -9,12 +9,18 @@ import { useEditorStore } from '@/store/editor-store'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { AppHeader } from '@/components/app/AppHeader'
-import { fadeUp, lineReveal, stagger } from '@/components/app/motion'
+import { EASE_OUT_EXPO, fadeUp, lineReveal, stagger } from '@/components/app/motion'
 import { SourceTextField } from './SourceTextField'
 import { SlideCountField } from './SlideCountField'
 import { ExampleList } from './ExampleList'
 import { DraftBanner } from './DraftBanner'
 import { HeroShowcase } from './HeroShowcase'
+import { ValueTicker } from './ValueTicker'
+import { StoryScroll } from './StoryScroll'
+import { SiteCursor } from '@/components/app/Cursor'
+import { JumpCurtain, useJumpCurtain } from '@/components/app/JumpCurtain'
+import { Magnetic } from '@/components/app/Magnetic'
+import { jumpTo, smoothScrollTo, useSmoothScroll } from '@/components/app/smooth-scroll'
 
 const FACTS = [
   { value: '6', label: 'типовых макетов: титульный, текст, список, две колонки, раздел, финал' },
@@ -35,7 +41,16 @@ interface FieldErrors {
 
 function SectionLabel({ number, title, aside }: { number: string; title: string; aside?: string }) {
   return (
-    <div className="flex items-baseline justify-between gap-4 border-t border-foreground pt-4">
+    <div className="relative flex items-baseline justify-between gap-4 pt-4">
+      {/* Линия рубрики прорисовывается, когда раздел появляется на экране */}
+      <motion.span
+        aria-hidden
+        className="absolute inset-x-0 top-0 h-px origin-left bg-foreground"
+        initial={{ scaleX: 0 }}
+        whileInView={{ scaleX: 1 }}
+        viewport={{ once: true, margin: '-40px' }}
+        transition={{ duration: 1.3, ease: EASE_OUT_EXPO }}
+      />
       <div className="flex items-baseline gap-4">
         <span className="font-display text-[15px] italic text-brand">{number}</span>
         <h2 className="eyebrow !text-foreground">{title}</h2>
@@ -58,6 +73,14 @@ export function CreatePage() {
   const savedAt = useEditorStore((s) => s.savedAt)
   const closeEditor = useEditorStore((s) => s.close)
   const [errors, setErrors] = useState<FieldErrors>({})
+
+  // Параллакс обложки: заголовок уходит вверх быстрее колоды — появляется глубина
+  const reduceMotion = useReducedMotion()
+  const { scrollY } = useScroll()
+  const headlineY = useTransform(scrollY, [0, 700], [0, reduceMotion ? 0 : -90])
+  const headlineOpacity = useTransform(scrollY, [0, 520], [1, reduceMotion ? 1 : 0.35])
+  const deckY = useTransform(scrollY, [0, 700], [0, reduceMotion ? 0 : 50])
+  useSmoothScroll(!reduceMotion)
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault()
@@ -82,9 +105,21 @@ export function CreatePage() {
     void generate()
   }
 
+  const curtain = useJumpCurtain()
+  const focusText = () => document.getElementById(textId)?.focus({ preventScroll: true })
+
+  // Далеко (через сцену «Как это работает») — переход занавесом, чтобы сцена
+  // не проматывалась за долю секунды. Рядом — обычная плавная прокрутка.
   const goToWorkspace = () => {
-    workspaceRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    window.setTimeout(() => document.getElementById(textId)?.focus({ preventScroll: true }), 500)
+    const target = workspaceRef.current
+    if (!target) return
+    const distance = Math.abs(target.getBoundingClientRect().top)
+    if (distance > window.innerHeight * 1.2) {
+      curtain.run('Новая презентация', () => jumpTo(target), focusText)
+    } else {
+      smoothScrollTo(target)
+      window.setTimeout(focusText, 900)
+    }
   }
 
   const pickExample = (example: DemoExample) => {
@@ -95,12 +130,14 @@ export function CreatePage() {
   }
 
   const showExamples = () => {
-    examplesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    smoothScrollTo(examplesRef.current, -160)
     examplesRef.current?.querySelector('button')?.focus({ preventScroll: true })
   }
 
   return (
     <div className="min-h-dvh">
+      <SiteCursor />
+      <JumpCurtain phase={curtain.phase} label={curtain.label} />
       <AppHeader />
 
       {/* ——— Обложка ——— */}
@@ -111,8 +148,14 @@ export function CreatePage() {
         </motion.div>
 
         <div className="grid gap-12 pt-12 pb-16 lg:grid-cols-12 lg:gap-10 lg:pt-16 lg:pb-24">
-          <motion.div variants={stagger(0.1, 0.08)} initial="hidden" animate="show" className="flex min-w-0 flex-col lg:col-span-6">
-            <h1 className="font-display text-[clamp(2.6rem,5.2vw,5rem)] leading-[1] font-[380] tracking-[-0.03em]">
+          <motion.div
+            variants={stagger(0.1, 0.08)}
+            initial="hidden"
+            animate="show"
+            style={{ y: headlineY }}
+            className="flex min-w-0 flex-col lg:col-span-6"
+          >
+            <motion.h1 style={{ opacity: headlineOpacity }} className="font-display text-[clamp(2.6rem,5.2vw,5rem)] leading-[1] font-[380] tracking-[-0.03em]">
               <span className="block overflow-hidden pb-[0.06em]">
                 <motion.span variants={lineReveal} className="block whitespace-nowrap">
                   Из доклада&nbsp;—
@@ -123,7 +166,7 @@ export function CreatePage() {
                   в&nbsp;<em className="font-[340] italic">презентацию</em>
                 </motion.span>
               </span>
-            </h1>
+            </motion.h1>
 
             <motion.p variants={fadeUp} className="mt-8 max-w-[42ch] text-[17px] leading-[1.65] text-muted-foreground">
               Вставьте текст выступления — ассистент выстроит структуру и разложит её по слайдам в едином оформлении. Остаётся
@@ -131,20 +174,24 @@ export function CreatePage() {
             </motion.p>
 
             <motion.div variants={fadeUp} className="mt-10 flex flex-wrap items-center gap-x-8 gap-y-4">
-              <Button size="xl" className="group" onClick={goToWorkspace}>
-                Начать работу
-                <ArrowRight className="transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:translate-x-1" />
-              </Button>
+              <Magnetic>
+                <Button size="xl" className="group" onClick={goToWorkspace}>
+                  Начать работу
+                  <ArrowRight className="transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:translate-x-1" />
+                </Button>
+              </Magnetic>
               <button type="button" onClick={() => pickExample(demoExamples[0])} className="link-draw pb-0.5 text-[14.5px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-4 focus-visible:ring-offset-background">
                 Открыть пример доклада
               </button>
             </motion.div>
           </motion.div>
 
-          <div className="min-w-0 lg:col-span-6 lg:pt-12">
+          <motion.div style={{ y: deckY }} className="min-w-0 lg:col-span-6 lg:pt-12">
             <HeroShowcase />
-          </div>
+          </motion.div>
         </div>
+
+        <ValueTicker />
 
         <motion.dl
           variants={stagger(0.2, 0.1)}
@@ -159,12 +206,19 @@ export function CreatePage() {
               variants={fadeUp}
               className={`flex flex-col gap-3 py-7 sm:px-8 ${i === 0 ? 'sm:pl-0' : 'border-t border-border sm:border-t-0 sm:border-l'}`}
             >
-              <dt className="font-display text-[44px] leading-none font-[380] tracking-[-0.02em]">{value}</dt>
+              <dt className="overflow-hidden pb-[0.08em] font-display text-[44px] leading-none font-[380] tracking-[-0.02em]">
+                <motion.span variants={lineReveal} className="block">
+                  {value}
+                </motion.span>
+              </dt>
               <dd className="max-w-[30ch] text-[13.5px] leading-relaxed text-muted-foreground">{label}</dd>
             </motion.div>
           ))}
         </motion.dl>
       </section>
+
+      {/* ——— Как это работает: сцена, управляемая прокруткой ——— */}
+      <StoryScroll />
 
       {/* ——— Рабочая область ——— */}
       <main ref={workspaceRef} className="mx-auto w-full max-w-[1280px] scroll-mt-20 px-5 pt-16 pb-24 sm:px-8 lg:pt-24">
@@ -233,10 +287,12 @@ export function CreatePage() {
                 <p className="hidden text-xs text-muted-foreground sm:block">
                   <kbd className="font-sans font-medium text-foreground">Ctrl + Enter</kbd> — создать, не отрывая рук от клавиатуры
                 </p>
-                <Button type="submit" size="xl" className="group w-full sm:w-auto">
-                  Создать презентацию
-                  <ArrowRight className="transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:translate-x-1" />
-                </Button>
+                <Magnetic className="w-full sm:w-auto">
+                  <Button type="submit" size="xl" className="group w-full sm:w-auto">
+                    Создать презентацию
+                    <ArrowRight className="transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:translate-x-1" />
+                  </Button>
+                </Magnetic>
               </div>
             </form>
           </motion.div>
@@ -266,13 +322,20 @@ export function CreatePage() {
               </h2>
               <ol className="flex flex-col">
                 {STEPS.map(({ title, text }, i) => (
-                  <li key={title} className="flex gap-5 border-b border-border py-4 first:pt-0 last:border-b-0">
+                  <motion.li
+                    key={title}
+                    initial={{ opacity: 0, x: -12 }}
+                    whileInView={{ opacity: 1, x: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.9, delay: 0.15 + i * 0.12, ease: EASE_OUT_EXPO }}
+                    className="flex gap-5 border-b border-border py-4 first:pt-0 last:border-b-0"
+                  >
                     <span className="font-display text-[26px] leading-none font-[380] text-foreground/35 tabular-nums">{i + 1}</span>
                     <span className="flex flex-col gap-1">
                       <span className="text-[14px] font-medium">{title}</span>
                       <span className="text-[13px] leading-relaxed text-muted-foreground">{text}</span>
                     </span>
-                  </li>
+                  </motion.li>
                 ))}
               </ol>
             </motion.section>

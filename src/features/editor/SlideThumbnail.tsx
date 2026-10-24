@@ -74,6 +74,7 @@ export const SlideThumbnail = memo(function SlideThumbnail({ slide, scene, index
       >
         <motion.div
           initial={{ opacity: 0, y: 10, scale: 0.96 }}
+          exit={{ opacity: 0, scale: 0.9, rotate: -3, transition: { duration: 0.3, ease: 'easeIn' } }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           transition={{ duration: 0.5, delay: Math.min(index, 12) * 0.04, ease: EASE_OUT_EXPO }}
         >

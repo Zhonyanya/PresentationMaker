@@ -10,7 +10,8 @@ const buttonVariants = cva(
       variant: {
         default: 'bg-primary text-primary-foreground hover:bg-[#2a2a28]',
         destructive: 'bg-destructive text-white hover:bg-destructive/90',
-        outline: 'border border-[#141414]/25 bg-transparent text-foreground hover:border-foreground hover:bg-foreground/[0.03]',
+        outline:
+          'border border-[#141414]/25 bg-transparent bg-[linear-gradient(var(--foreground),var(--foreground))] bg-no-repeat bg-[length:0%_100%] bg-left text-foreground transition-[background-size,color,border-color] duration-500 hover:border-foreground hover:bg-[length:100%_100%] hover:text-background',
         secondary: 'bg-secondary text-secondary-foreground hover:bg-[#dfd9cb]',
         ghost: 'text-foreground/75 hover:bg-foreground/[0.05] hover:text-foreground',
         link: 'link-draw h-auto rounded-none px-0 text-foreground',

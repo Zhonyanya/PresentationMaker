@@ -1,4 +1,5 @@
 import { useCallback } from 'react'
+import { AnimatePresence } from 'motion/react'
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import { restrictToParent } from './dnd-modifiers'
@@ -62,6 +63,8 @@ export function SlideRail({ slides, scenes, selectedId }: SlideRailProps) {
             aria-orientation="vertical"
             className="scroll-thin relative flex min-h-0 flex-1 gap-4 overflow-auto p-3 max-lg:flex-row lg:flex-col lg:px-3 lg:py-4"
           >
+            {/* AnimatePresence — чтобы удалённая миниатюра плавно исчезала */}
+            <AnimatePresence initial={false}>
             {slides.map((slide, index) => (
               <SlideThumbnail
                 key={slide.id}
@@ -75,6 +78,7 @@ export function SlideRail({ slides, scenes, selectedId }: SlideRailProps) {
                 onSelect={select}
               />
             ))}
+            </AnimatePresence>
           </div>
         </SortableContext>
       </DndContext>

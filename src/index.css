@@ -146,10 +146,33 @@
   }
 }
 
+/* Фирменный курсор главной: системный скрыт, кроме полей ввода */
+@media (pointer: fine) {
+  .site-cursor,
+  .site-cursor * {
+    cursor: none !important;
+  }
+  .site-cursor input,
+  .site-cursor textarea,
+  .site-cursor select,
+  .site-cursor [contenteditable='true'] {
+    cursor: text !important;
+  }
+}
+
 /* Тонкие скроллбары в панелях редактора */
 .scroll-thin {
   scrollbar-width: thin;
   scrollbar-color: #c9c2b2 transparent;
+}
+
+@keyframes ticker {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
 }
 
 @keyframes indeterminate {

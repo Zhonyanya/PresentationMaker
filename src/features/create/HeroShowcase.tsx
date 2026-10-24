@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type PointerEvent } from 'react'
-import { animate, motion, useMotionValue, useReducedMotion, useSpring, useTransform } from 'motion/react'
+import { AnimatePresence, animate, motion, useMotionValue, useReducedMotion, useSpring, useTransform } from 'motion/react'
+import { getLayout } from '@/layouts/registry'
 import type { SlideScene } from '@/layouts/scene'
 import { SLIDE_PX, SlideRenderer } from '@/features/slides/SlideRenderer'
 import { useElementSize } from '@/hooks/useElementSize'
@@ -69,6 +70,8 @@ function DeckCard({ scene, rank, pulled, step, count, cardWidth, cardHeight, sca
     return () => controls.stop()
   }, [step, pulled, reduceMotion, bend])
 
+  // Слайд рисуется один раз — полосы изгиба переиспользуют этот элемент
+  const content = useMemo(() => <SlideRenderer scene={scene} scale={scale} />, [scene, scale])
   const zIndex = behind ? 5 : 50 - rank * 10
   const animating = pulled && step > 0 && !reduceMotion
 
@@ -87,7 +90,6 @@ function DeckCard({ scene, rank, pulled, step, count, cardWidth, cardHeight, sca
         transformStyle: 'flat',
         isolation: 'isolate',
         // Тень повторяет реальную форму листа, в том числе изогнутого
-        filter: 'drop-shadow(0 1px 1px rgb(20 20 20 / 0.06)) drop-shadow(0 18px 22px rgb(20 20 20 / 0.16))',
       }}
       initial={{ opacity: 0, y: 70, x: target.x, rotate: target.rotate * 2.5, scale: target.scale }}
       animate={
@@ -115,7 +117,7 @@ function DeckCard({ scene, rank, pulled, step, count, cardWidth, cardHeight, sca
       }
     >
       <PaperSheet width={cardWidth} height={cardHeight} bend={bend}>
-        {() => <SlideRenderer scene={scene} scale={scale} />}
+        {content}
       </PaperSheet>
     </motion.div>
   )
@@ -127,7 +129,7 @@ function DeckCard({ scene, rank, pulled, step, count, cardWidth, cardHeight, sca
  * и ложится поверх первой, остальные сдвигаются на шаг назад.
  */
 export function HeroShowcase() {
-  const { gallery, title, slideCount } = useMemo(getShowcase, [])
+  const { gallery, gallerySlides, title, slideCount } = useMemo(getShowcase, [])
   const deck = useMemo(() => DECK_ORDER.map((i) => ({ index: i, scene: gallery[i] })).filter((d) => d.scene), [gallery])
   const [ref, size] = useElementSize<HTMLDivElement>()
   const [step, setStep] = useState(0)
@@ -169,6 +171,7 @@ export function HeroShowcase() {
         role="button"
         tabIndex={0}
         aria-label="Показать следующий слайд примера"
+        data-cursor="Листать"
         onClick={(e) => {
           advance()
           // Клик мышью не должен ставить колоду на паузу через фокус
@@ -220,10 +223,26 @@ export function HeroShowcase() {
         transition={{ duration: 0.9, delay: 0.9, ease: EASE_OUT_EXPO }}
         className="mt-6 flex items-baseline justify-between gap-6 border-t border-border pt-3"
       >
-        <span className="font-display text-[15px] leading-snug text-foreground/80 italic">
-          Рис. 1 — «{title}», сгенерировано из текста доклада
+        {/* Подпись меняется вместе с верхним листом: номер, заголовок слайда и его макет */}
+        <span className="relative min-w-0 flex-1 overflow-hidden" aria-live="polite">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.span
+              key={topCard.index}
+              className="block font-display text-[15px] leading-snug text-foreground/80"
+              initial={{ y: '110%', opacity: 0 }}
+              animate={{ y: '0%', opacity: 1, transition: { duration: 0.6, ease: EASE_OUT_EXPO } }}
+              exit={{ y: '-110%', opacity: 0, transition: { duration: 0.25, ease: 'easeIn' } }}
+            >
+              <span className="italic">
+                Рис. {topCard.index + 1} — «{gallerySlides[topCard.index]?.title || title}»
+              </span>
+              {gallerySlides[topCard.index] && (
+                <span className="text-muted-foreground"> · макет «{getLayout(gallerySlides[topCard.index].layout).label.toLowerCase()}»</span>
+              )}
+            </motion.span>
+          </AnimatePresence>
         </span>
-        <span className="eyebrow shrink-0 tabular-nums" aria-live="polite">
+        <span className="eyebrow shrink-0 tabular-nums">
           {String(topCard.index + 1).padStart(2, '0')} / {String(slideCount).padStart(2, '0')}
         </span>
       </motion.figcaption>

@@ -43,6 +43,7 @@ const DEAL = [
 function DealtSheet({ scene, index, width, leaving, reduceMotion }: { scene: SlideScene; index: number; width: number; leaving: boolean; reduceMotion: boolean }) {
   const height = (width * 9) / 16
   const bend = useMotionValue(reduceMotion ? 0 : 46)
+  const content = useMemo(() => <SlideRenderer scene={scene} scale={width / SLIDE_PX.width} />, [scene, width])
   const { from, to } = DEAL[index]
   const delay = 0.3 + index * 0.2
 
@@ -64,7 +65,6 @@ function DealtSheet({ scene, index, width, leaving, reduceMotion }: { scene: Sli
         zIndex: index,
         perspective: 1100,
         isolation: 'isolate',
-        filter: 'drop-shadow(0 1px 1px rgb(20 20 20 / 0.08)) drop-shadow(0 22px 26px rgb(20 20 20 / 0.18))',
       }}
       initial={reduceMotion ? { ...to, opacity: 0 } : { ...from, opacity: 0, scale: 1.08 }}
       animate={
@@ -79,7 +79,7 @@ function DealtSheet({ scene, index, width, leaving, reduceMotion }: { scene: Sli
       }
     >
       <PaperSheet width={width} height={height} bend={bend}>
-        {() => <SlideRenderer scene={scene} scale={width / SLIDE_PX.width} />}
+        {content}
       </PaperSheet>
     </motion.div>
   )

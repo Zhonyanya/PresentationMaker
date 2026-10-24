@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { animate, motion, useMotionValue, useReducedMotion } from 'motion/react'
 import { PaperSheet } from '@/components/app/PaperSheet'
 import { EASE_OUT_EXPO } from '@/components/app/motion'
@@ -104,7 +104,8 @@ function Sheet({ id, rank, cardWidth, cardHeight, reduceMotion }: { id: number; 
     if (reduceMotion || seeded) return
     // Лист гнётся в полёте и пружинит при укладке, затем на нём проступает макет
     const controls = animate(bend, [40, 22, -9, 3, 0], { duration: 1.25, times: [0, 0.35, 0.62, 0.84, 1], ease: 'easeInOut' })
-    const timer = window.setTimeout(() => setInked(true), 820)
+    // Печать начинается, когда лист уже лёг: изгиб закончился и лист рисуется одним слоем
+    const timer = window.setTimeout(() => setInked(true), 1300)
     return () => {
       controls.stop()
       window.clearTimeout(timer)
@@ -119,6 +120,9 @@ function Sheet({ id, rank, cardWidth, cardHeight, reduceMotion }: { id: number; 
   }, [rank, bend, reduceMotion])
 
   const fromLeft = id % 2 === 0
+  const printing = inked && rank === 0 && !reduceMotion
+  // Содержимое листа создаётся один раз на состояние — полосы изгиба его не перерисовывают
+  const content = useMemo(() => <SheetFace id={id} inked={inked} printing={printing} />, [id, inked, printing])
 
   return (
     <motion.div
@@ -131,7 +135,6 @@ function Sheet({ id, rank, cardWidth, cardHeight, reduceMotion }: { id: number; 
         transformOrigin: '50% 100%',
         perspective: 1100,
         isolation: 'isolate',
-        filter: 'drop-shadow(0 1px 1px rgb(20 20 20 / 0.06)) drop-shadow(0 18px 22px rgb(20 20 20 / 0.15))',
       }}
       initial={
         reduceMotion
@@ -144,22 +147,26 @@ function Sheet({ id, rank, cardWidth, cardHeight, reduceMotion }: { id: number; 
       transition={{ duration: rank === 0 ? 1.15 : 0.9, ease: EASE_OUT_EXPO, delay: seeded ? 0.15 + id * 0.12 : id === SEEDED ? 0.45 : 0 }}
     >
       <PaperSheet width={cardWidth} height={cardHeight} bend={bend}>
-        {() => (
-          <div className="relative size-full overflow-hidden bg-white">
-            <SheetContent kind={KINDS[id % KINDS.length]} inked={inked} />
-            {/* Линия печати проходит по листу один раз, пока проступает макет */}
-            {inked && rank === 0 && !reduceMotion && (
-              <motion.span
-                className="absolute inset-x-0 h-[2px] bg-[linear-gradient(90deg,transparent,rgb(20_20_20/0.35),transparent)]"
-                initial={{ top: '0%', opacity: 0 }}
-                animate={{ top: ['0%', '100%'], opacity: [0, 1, 1, 0] }}
-                transition={{ duration: 1.5, ease: [0.65, 0, 0.35, 1] }}
-              />
-            )}
-          </div>
-        )}
+        {content}
       </PaperSheet>
     </motion.div>
+  )
+}
+
+function SheetFace({ id, inked, printing }: { id: number; inked: boolean; printing: boolean }) {
+  return (
+    <div className="relative size-full overflow-hidden bg-white">
+      <SheetContent kind={KINDS[id % KINDS.length]} inked={inked} />
+      {/* Линия печати проходит по листу один раз, пока проступает макет */}
+      {printing && (
+        <motion.span
+          className="absolute inset-x-0 h-[2px] bg-[linear-gradient(90deg,transparent,rgb(20_20_20/0.35),transparent)]"
+          initial={{ top: '0%', opacity: 0 }}
+          animate={{ top: ['0%', '100%'], opacity: [0, 1, 1, 0] }}
+          transition={{ duration: 1.5, ease: [0.65, 0, 0.35, 1] }}
+        />
+      )}
+    </div>
   )
 }
 

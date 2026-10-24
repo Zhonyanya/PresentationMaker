@@ -3,6 +3,7 @@ import { normalizeGenerated } from '@/domain/operations'
 import { demoExamples, type DemoExample } from '@/data/demo-examples'
 import { buildPresentationScenes } from '@/layouts/registry'
 import type { SlideScene } from '@/layouts/scene'
+import type { Slide } from '@/domain/presentation'
 import { presentationTheme } from '@/theme/presentation-theme'
 
 /**
@@ -20,6 +21,8 @@ interface Showcase {
   title: string
   slideCount: number
   gallery: SlideScene[]
+  /** Слайды витрины — в том же порядке, что и gallery (для подписей) */
+  gallerySlides: Slide[]
   previews: Record<string, SlideScene>
 }
 
@@ -33,6 +36,7 @@ export function getShowcase(): Showcase {
     slideCount: main.presentation.slides.length,
     // Без заключительного слайда — он повторяет титульный по цвету
     gallery: main.scenes.slice(0, -1),
+    gallerySlides: main.presentation.slides.slice(0, -1),
     previews: Object.fromEntries(demoExamples.map((example) => [example.id, build(example).scenes[1]])),
   }
   return cache

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
+import { motion } from 'motion/react'
 import { Download, FileCheck2, Loader2, TriangleAlert } from 'lucide-react'
+import { EASE_OUT_EXPO } from '@/components/app/motion'
 import { toast } from 'sonner'
 import type { Presentation } from '@/domain/presentation'
 import type { SlideScene } from '@/layouts/scene'
@@ -26,6 +28,18 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
   const [fileName, setFileName] = useState('')
   const [includeNotes, setIncludeNotes] = useState(true)
   const [busy, setBusy] = useState(false)
+  /** Имя сохранённого файла — показываем подтверждение перед закрытием окна */
+  const [savedName, setSavedName] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!savedName) return
+    const timer = window.setTimeout(() => onOpenChange(false), 1700)
+    return () => window.clearTimeout(timer)
+  }, [savedName, onOpenChange])
+
+  useEffect(() => {
+    if (open) setSavedName(null)
+  }, [open])
 
   useEffect(() => {
     if (open) setFileName(toFileName(presentation.title).replace(/\.pptx$/, ''))
@@ -41,8 +55,7 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
     setBusy(true)
     try {
       const name = await downloadPptx(presentation, fileName, { includeNotes })
-      toast.success('Презентация скачана', { description: name })
-      onOpenChange(false)
+      setSavedName(name)
     } catch (error) {
       console.error('[export]', error)
       toast.error('Не удалось сформировать файл', { description: 'Попробуйте ещё раз. Если ошибка повторится, сообщите разработчикам.' })
@@ -54,6 +67,31 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent>
+        {savedName ? (
+          <motion.div
+            role="status"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: EASE_OUT_EXPO }}
+            className="flex flex-col items-center py-6 text-center"
+          >
+            <svg viewBox="0 0 64 64" className="size-16" fill="none" stroke="currentColor" strokeWidth={1.4} aria-hidden>
+              <motion.circle cx="32" cy="32" r="30" initial={{ pathLength: 0 }} animate={{ pathLength: 1 }} transition={{ duration: 0.8, ease: EASE_OUT_EXPO }} />
+              <motion.path
+                d="M20 33l8 8 16-18"
+                strokeWidth={1.8}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                initial={{ pathLength: 0 }}
+                animate={{ pathLength: 1 }}
+                transition={{ duration: 0.5, delay: 0.45, ease: EASE_OUT_EXPO }}
+              />
+            </svg>
+            <DialogTitle className="mt-6 italic">Файл сохранён</DialogTitle>
+            <DialogDescription className="mt-2 max-w-[36ch] break-all">{savedName}</DialogDescription>
+          </motion.div>
+        ) : (
+        <>
         <DialogHeader>
           <DialogTitle>Скачать презентацию</DialogTitle>
           <DialogDescription>
@@ -150,6 +188,8 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
             {busy ? 'Готовим файл…' : 'Скачать PPTX'}
           </Button>
         </DialogFooter>
+        </>
+        )}
       </DialogContent>
     </Dialog>
   )
