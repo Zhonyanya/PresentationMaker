@@ -6,7 +6,7 @@ import { presentationSchema } from '@/domain/presentation'
 import { buildPptx } from '@/export/pptx-export'
 
 const id = '11111111-1111-4111-8111-111111111111'
-const document = JSON.parse(readFileSync(new URL('../../backend/app/ml/fixtures/all-layouts.json', import.meta.url), 'utf8'))
+const document = JSON.parse(readFileSync(new URL('../../../backend/app/ml/fixtures/all-layouts.json', import.meta.url), 'utf8'))
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
 
 describe('серверный контракт v1', () => {

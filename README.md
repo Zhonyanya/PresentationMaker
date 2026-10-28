@@ -56,9 +56,10 @@ uvx --from podman-compose==1.6.0 podman-compose down
 
 ### Автономная демонстрация
 
-Рекомендуется **Node.js 24 LTS** (`nvm use`, если установлен nvm); также поддерживаются Node 20.19+ и 22.12+. Версии ограничены в `package.json`, выбранная LTS — в `.nvmrc`.
+Рекомендуется **Node.js 24 LTS** (`nvm use`, если установлен nvm); также поддерживаются Node 20.19+ и 22.12+. Версии ограничены в `frontend/package.json`, выбранная LTS — в `frontend/.nvmrc`. Все команды фронтенда выполняются из `frontend/`:
 
 ```bash
+cd frontend
 npm ci             # 1. зависимости по lock-файлу
 VITE_API_MODE=mock npm run dev  # 2. запуск → http://localhost:5173
 npm run build      # 3. production-сборка → папка dist/
@@ -67,7 +68,7 @@ npm test           #    тесты (Vitest)
 npm run typecheck  #    проверка типов
 ```
 
-`dist/` — обычная статика. `npm run preview` — локальная проверка сборки, не production-сервер. Команды с `NAME=value` показаны для bash/zsh; в PowerShell используйте `$env:NAME="value"` перед командой. `VITE_*` из старого `.env.local` могут менять режим сборки: проверьте их при переходе между mock и HTTP.
+`frontend/dist/` — обычная статика. `npm run preview` — локальная проверка сборки, не production-сервер. Команды с `NAME=value` показаны для bash/zsh; в PowerShell используйте `$env:NAME="value"` перед командой. `VITE_*` из старого `.env.local` могут менять режим сборки: проверьте их при переходе между mock и HTTP.
 
 ### Серверный сценарий без Docker (разработка)
 
@@ -90,7 +91,7 @@ uv run --locked celery -A app.worker:celery beat --loglevel=INFO --schedule=./ce
 
 Нужен один Beat; отдельный maintenance-worker обязателен, чтобы обслуживание не ждало окончания ML. Файл расписания создаётся в `backend/` и исключён из Git. Для полного backend на хосте нужен Linux (watchdog ML использует POSIX); на macOS/Windows используйте Docker.
 
-Из корня репозитория:
+Из `frontend/`:
 
 ```bash
 npm ci
@@ -115,7 +116,7 @@ VITE_API_MODE=http VITE_DEV_PROXY_TARGET=http://127.0.0.1:8000 npm run dev
 Редакционный стиль: тёплая бумажная основа, чернильный чёрный, один терракотовый акцент, линии в 1 px, без градиентов и «стекла».
 
 - Шрифты: **Noto Serif Display** (заголовки) и **Inter Tight** (интерфейс), оба с кириллицей, подключаются локально через `@fontsource` — работают без доступа к Google Fonts.
-- Токены цветов, радиусов и теней — `src/index.css`. Общие параметры анимаций — `src/components/app/motion.ts` (библиотека `motion`).
+- Токены цветов, радиусов и теней — `frontend/src/index.css`. Общие параметры анимаций — `frontend/src/components/app/motion.ts` (библиотека `motion`).
 - Анимации учитывают системную настройку «Уменьшить движение» (`MotionConfig reducedMotion="user"`).
 - Дизайн интерфейса и оформление слайдов — разные системы: слайды строго следуют `presentation-theme.ts`.
 
@@ -123,7 +124,7 @@ VITE_API_MODE=http VITE_DEV_PROXY_TARGET=http://127.0.0.1:8000 npm run dev
 
 Включён по умолчанию (`VITE_API_MODE=mock`).
 
-- Генератор: `src/api/mock/mock-generator.ts` и `src/api/mock/text-analysis.ts`. Он выделяет заголовки (`#`, нумерация, короткие строки без точки, ЗАГЛАВНЫЕ), абзацы, списки и пары вида «Проблемы: … / Решения: …», раскладывает их по макетам и подгоняет число слайдов к запрошенному. Формулировки берутся из исходного текста, полный текст блока уходит в заметки докладчика. **Это не ИИ** — интерфейс честно помечает режим бейджем «Демо-режим».
+- Генератор: `frontend/src/api/mock/mock-generator.ts` и `frontend/src/api/mock/text-analysis.ts`. Он выделяет заголовки (`#`, нумерация, короткие строки без точки, ЗАГЛАВНЫЕ), абзацы, списки и пары вида «Проблемы: … / Решения: …», раскладывает их по макетам и подгоняет число слайдов к запрошенному. Формулировки берутся из исходного текста, полный текст блока уходит в заметки докладчика. **Это не ИИ** — интерфейс честно помечает режим бейджем «Демо-режим».
 - Ответ mock-генератора проходит ту же Zod-валидацию, что и ответ сервера.
 - Проверить экран ошибки: откройте `http://localhost:5173/?mockFailEvery=1` — каждая генерация завершится ошибкой сервера.
 
@@ -204,7 +205,7 @@ Watchdog завершает группу ML-процесса по deadline/по�
 
 ## HTTP API и подключение фронтенда
 
-В корневом `.env`/`.env.local`:
+В `frontend/.env`/`frontend/.env.local`:
 
 ```bash
 VITE_API_MODE=http
@@ -212,7 +213,7 @@ VITE_API_BASE_URL=https://api.example.ru   # пусто — тот же доме
 VITE_DEV_PROXY_TARGET=http://127.0.0.1:8000 # только для npm run dev: прокси /api → бэкенд
 ```
 
-`VITE_*` вшиваются при сборке. Production обычно отдаёт `dist/` и `/api` с одного origin. При отдельном API-домене нужны явный CORS с credentials и проверка cookie в целевом браузере.
+`VITE_*` вшиваются при сборке. Production обычно отдаёт `frontend/dist/` и `/api` с одного origin. При отдельном API-домене нужны явный CORS с credentials и проверка cookie в целевом браузере.
 
 Текущий `server-api.ts` ограничивает **отдельный HTTP-запрос 20 секундами**, а не держит соединение на всю генерацию. Polling — каждые 2,5 с (10 с в скрытой вкладке), без общего клиентского таймера на 25 минут. `VITE_API_TIMEOUT_MS` относится только к старому синхронному клиенту и **не используется ServerApp**; серверный бюджет задаётся `PM_JOB_DEADLINE_SECONDS` (не более 1500 с).
 
@@ -237,8 +238,10 @@ VITE_DEV_PROXY_TARGET=http://127.0.0.1:8000 # только для npm run dev: �
 
 ## Где что лежит
 
+Монорепозиторий: `frontend/` — React-приложение (Vite), `backend/` — FastAPI, Celery и ML-адаптер, `docs/` — общая JSON Schema данных генерации, в корне — `compose.yaml`, CI и документация.
+
 ```
-src/
+frontend/src/
 ├── domain/
 │   ├── presentation.ts     ← ТИПЫ И ZOD-СХЕМЫ: слайды, презентация, запрос и ответ API, лимиты
 │   ├── operations.ts       ← чистые операции редактора (добавить, удалить, дублировать, сменить макет, разделить…)
@@ -274,7 +277,7 @@ src/
 └── index.css               ← дизайн-токены ИНТЕРФЕЙСА (не презентаций)
 ```
 
-Переключение верхнего сценария — `src/App.tsx`: HTTP использует `ServerApp` и `server-api.ts`, а не старый синхронный клиент. Каталог `backend/` описан в разделе архитектуры выше; `ML_CONTRACT.md` — правила интеграции, `docs/*.schema.json` — JSON Schema данных генерации.
+Переключение верхнего сценария — `frontend/src/App.tsx`: HTTP использует `ServerApp` и `server-api.ts`, а не старый синхронный клиент. Каталог `backend/` описан в разделе архитектуры выше; `ML_CONTRACT.md` — правила интеграции, `docs/*.schema.json` — JSON Schema данных генерации.
 
 ### Как устроено превью и экспорт
 
@@ -287,22 +290,22 @@ Slide (данные) ──► определение макета.buildScene() 
 
 ## Корпоративная тема
 
-Всё оформление слайдов — в одном файле **`src/theme/presentation-theme.ts`**. Сейчас там **временная нейтральная тема**: цвета и шрифты не являются официальными, логотипа нет. Интерфейс показывает бейдж «Временная тема», пока `isOfficial: false`.
+Всё оформление слайдов — в одном файле **`frontend/src/theme/presentation-theme.ts`**. Сейчас там **временная нейтральная тема**: цвета и шрифты не являются официальными, логотипа нет. Интерфейс показывает бейдж «Временная тема», пока `isOfficial: false`.
 
 Когда появится брендбук:
 
 1. Замените `colors` (HEX), `fonts.heading` / `fonts.body` (имя шрифта, как оно называется в PowerPoint), при необходимости размеры в `typography` и поля в `spacing`.
-2. Логотип: положите файл в `public/`, например `public/logo.png`, и укажите
+2. Логотип: положите файл в `frontend/public/`, например `frontend/public/logo.png`, и укажите
    ```ts
    logo: { src: '/logo.png', width: 1.4, height: 0.6, onDarkSlides: true, srcOnDark: '/logo-white.png' }
    ```
    Размеры — в дюймах; изображение вписывается с сохранением пропорций.
 3. Текст в колонтитуле — `footer.text`, номер слайда — `footer.showSlideNumber`.
 4. Поставьте `isOfficial: true` и `name`.
-5. Если сменился шрифт — перепроверьте коэффициенты ширины символа в `src/layouts/text-fit.ts` (там описано, как их замерить), иначе подбор размера будет неточным.
-6. Схематичные миниатюры макетов в `src/features/editor/LayoutPicker.tsx` нарисованы цветами временной темы — обновите их под новую гамму.
+5. Если сменился шрифт — перепроверьте коэффициенты ширины символа в `frontend/src/layouts/text-fit.ts` (там описано, как их замерить), иначе подбор размера будет неточным.
+6. Схематичные миниатюры макетов в `frontend/src/features/editor/LayoutPicker.tsx` нарисованы цветами временной темы — обновите их под новую гамму.
 
-Расположение элементов на слайдах (типовые макеты) задаётся в `src/layouts/definitions/*.ts`.
+Расположение элементов на слайдах (типовые макеты) задаётся в `frontend/src/layouts/definitions/*.ts`.
 
 > **Шрифты.** PPTX хранит только имя шрифта. Если у сотрудника он не установлен, PowerPoint подставит замену. Для корпоративного шрифта его нужно установить на рабочие места.
 
@@ -310,19 +313,19 @@ Slide (данные) ──► определение макета.buildScene() 
 
 Пример: макет «Цитата».
 
-1. **Схема** — `src/domain/presentation.ts`:
+1. **Схема** — `frontend/src/domain/presentation.ts`:
    ```ts
    export const quoteSlideSchema = z.object({ ...slideBase, layout: z.literal('quote'), quote: text(600), author: optionalText(200) })
    ```
    Добавьте её в `slideSchema` и в `generatedSlideSchema` (с `.extend(optionalId)`).
-2. **Определение** — `src/layouts/definitions/quote.ts` по образцу `section.ts`: `label`, `description`, `icon`, `fields` (поля правой панели), `fromContent`/`toContent` (перенос текста при смене макета), `buildScene` (геометрия в дюймах; используйте `fittedText` из `chrome.ts`).
-3. **Реестр** — строка в `src/layouts/registry.ts`.
+2. **Определение** — `frontend/src/layouts/definitions/quote.ts` по образцу `section.ts`: `label`, `description`, `icon`, `fields` (поля правой панели), `fromContent`/`toContent` (перенос текста при смене макета), `buildScene` (геометрия в дюймах; используйте `fittedText` из `chrome.ts`).
+3. **Реестр** — строка в `frontend/src/layouts/registry.ts`.
 4. Готово: макет появится в выборе макета и меню «Добавить», в превью и в PPTX. Тест `у каждого макета из схемы есть определение в реестре` подскажет, если что-то забыто. По желанию — схематичная миниатюра в `LayoutPicker.tsx` (иначе показывается иконка).
-5. Согласуйте макет с backend и ML: обновите `backend/app/presentations/schemas.py`, [ML-контракт](ML_CONTRACT.md), JSON Schema (`npm run schema`), общую фикстуру и контрактные тесты обеих сторон. Одной регистрации во frontend для HTTP-режима недостаточно.
+5. Согласуйте макет с backend и ML: обновите `backend/app/presentations/schemas.py`, [ML-контракт](ML_CONTRACT.md), JSON Schema (`npm run schema` из `frontend/`), общую фикстуру и контрактные тесты обеих сторон. Одной регистрации во frontend для HTTP-режима недостаточно.
 
 ## Тесты
 
-`npm ci && npm test && npm run build && npm audit` — установка, тесты, типы/сборка и аудит зависимостей.
+Из `frontend/`: `npm ci && npm test && npm run build && npm audit` — установка, тесты, типы/сборка и аудит зависимостей.
 
 `npm test` — тесты фронтенда (Vitest):
 
