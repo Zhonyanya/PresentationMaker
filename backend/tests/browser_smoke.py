@@ -20,15 +20,15 @@ def main():
         errors = []
         page.on("pageerror", lambda error: errors.append(type(error).__name__))
         page.goto(os.getenv("PM_BROWSER_URL", "http://localhost:5173"))
-        expect(page.get_by_role("heading", name="Вход", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="С возвращением.", exact=True)).to_be_visible()
         page.evaluate("""localStorage.setItem('ai-presentations:source:v1', JSON.stringify({
             state:{draft:{text:'OLD PRIVATE DEMO TEXT', title:'OLD PRIVATE TITLE', slideCount:8}},
             version:0}))""")
-        page.get_by_role("button", name="Создать аккаунт", exact=True).click()
+        page.get_by_role("button", name="Регистрация", exact=True).click()
         account = f"browser-{time.time_ns()}"
         page.get_by_label("Логин", exact=True).fill(account)
-        page.get_by_label("Пароль — 15–128 символов").fill("browser test password long")
-        page.get_by_role("button", name="Зарегистрироваться", exact=True).click()
+        page.get_by_label("Пароль", exact=True).fill("browser test password long")
+        page.get_by_role("button", name="Создать аккаунт", exact=True).click()
         expect(page.get_by_role("button", name="Выйти", exact=True)).to_be_visible()
         expect(page.get_by_text("OLD PRIVATE TITLE", exact=True)).to_have_count(0)
         source = page.get_by_label("Текст доклада или план выступления", exact=True)
@@ -92,12 +92,12 @@ def main():
         reference = page.evaluate("key => localStorage.getItem(key)", keys[0])
         assert "Синтетический доклад" not in reference and "Тестовая правка" not in reference
         page.get_by_role("button", name="Выйти", exact=True).click()
-        expect(page.get_by_role("heading", name="Вход", exact=True)).to_be_visible()
+        expect(page.get_by_role("heading", name="С возвращением.", exact=True)).to_be_visible()
         expect(page.get_by_role("heading", name="Правка командой", exact=True)).to_have_count(0)
-        page.get_by_role("button", name="Создать аккаунт", exact=True).click()
+        page.get_by_role("button", name="Регистрация", exact=True).click()
         page.get_by_label("Логин", exact=True).fill(f"other-{time.time_ns()}")
-        page.get_by_label("Пароль — 15–128 символов").fill("browser other password long")
-        page.get_by_role("button", name="Зарегистрироваться", exact=True).click()
+        page.get_by_label("Пароль", exact=True).fill("browser other password long")
+        page.get_by_role("button", name="Создать аккаунт", exact=True).click()
         expect(page.get_by_role("button", name="Выйти", exact=True)).to_be_visible()
         expect(page.get_by_label("Текст доклада или план выступления", exact=True)).to_have_value(
             ""
