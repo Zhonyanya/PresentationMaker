@@ -13,7 +13,7 @@ import { EditorHeader } from '@/features/editor/EditorHeader'
 import { SlideCanvas } from '@/features/editor/SlideCanvas'
 import { ExportDialog } from '@/features/editor/ExportDialog'
 import { SlideRenderer, SLIDE_PX } from '@/features/slides/SlideRenderer'
-import { AppHeader } from '@/components/app/AppHeader'
+import { AuthScreen, SessionCheck, type AuthKind } from './AuthScreen'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -37,7 +37,7 @@ export function ServerApp() {
 function Workspace() {
   const [user, setUser] = useState<ServerUser | null>(null)
   const [initializing, setInitializing] = useState(true)
-  const [authKind, setAuthKind] = useState<'login' | 'register'>('login')
+  const [authKind, setAuthKind] = useState<AuthKind>('login')
   const [login, setLogin] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -102,11 +102,18 @@ function Workspace() {
         userRef.current = account; setUser(account)
         await restore(account, activeEpoch)
       } catch (cause) {
-        if (mounted && toApiError(cause).code !== 'unauthorized') setError(toApiError(cause).message)
+        // 401 here just means "not signed in"; 'aborted' means a newer identity superseded this request.
+        const { code, message } = toApiError(cause)
+        if (mounted && code !== 'unauthorized' && code !== 'aborted') setError(message)
       } finally { if (mounted) setInitializing(false) }
     }
     void bootstrap()
-    const unauthorized = () => { clearPrivate(); setError('Сессия истекла. Войдите снова.') }
+    // Without a signed-in user there is no session to expire and no private state to clear;
+    // resetting anyway would also abort the parallel bootstrap request.
+    const unauthorized = () => {
+      if (!userRef.current) return
+      clearPrivate(); setError('Сессия истекла. Войдите снова.')
+    }
     const changed = (event: StorageEvent) => {
       if (event.key === 'pm:auth-change') { clearPrivate(); void bootstrap() }
     }
@@ -218,16 +225,10 @@ function Workspace() {
     } catch (cause) { if (activeEpoch === epoch.current) setError(toApiError(cause).message) }
   }
 
-  if (initializing) return <main className="p-8" role="status">Проверяем сессию…</main>
-  if (!user) return <><AppHeader /><main className="mx-auto max-w-md px-5 py-16">
-    <h1 className="mb-8 font-display text-4xl">{authKind === 'login' ? 'Вход' : 'Регистрация'}</h1>
-    <form onSubmit={(e) => void authenticate(e)} className="space-y-5">
-      <div className="space-y-2"><Label htmlFor="login">Логин</Label><Input id="login" required minLength={3} maxLength={64} pattern="[a-zA-Z0-9_.\-]{3,64}" autoComplete="username" value={login} onChange={(e) => setLogin(e.target.value)} /></div>
-      <div className="space-y-2"><Label htmlFor="password">Пароль — 15–128 символов</Label><Input id="password" required type="password" minLength={15} maxLength={128} autoComplete={authKind === 'login' ? 'current-password' : 'new-password'} value={password} onChange={(e) => setPassword(e.target.value)} /></div>
-      {error && <p role="alert" className="text-destructive">{error}</p>}
-      <Button disabled={busy}>{busy ? 'Подождите…' : authKind === 'login' ? 'Войти' : 'Зарегистрироваться'}</Button>
-      <Button type="button" variant="link" disabled={busy} onClick={() => { setAuthKind(authKind === 'login' ? 'register' : 'login'); setError('') }}>{authKind === 'login' ? 'Создать аккаунт' : 'Уже есть аккаунт'}</Button>
-    </form></main></>
+  if (initializing) return <SessionCheck />
+  if (!user) return <AuthScreen kind={authKind} login={login} password={password} error={error} busy={busy}
+    onKindChange={(kind) => { setAuthKind(kind); setError('') }} onLoginChange={setLogin} onPasswordChange={setPassword}
+    onSubmit={(e) => void authenticate(e)} />
 
   const document = current?.document
   const selectedIndex = document?.slides.findIndex((s) => s.id === selected?.id) ?? 0
