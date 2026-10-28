@@ -1,0 +1,127 @@
+# Локальный интеграционный стенд с fixture, НЕ production и НЕ настоящий ИИ.
+# Не публикуйте этот development-стенд в интернет.
+x-backend: &backend
+  image: presentation-maker-backend:local
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  environment: &backend-env
+    PM_ENVIRONMENT: development
+    PM_ML_ADAPTER: fixture
+    PM_DATABASE_URL: postgresql+psycopg://presentation:local-demo-only@db/presentation_maker
+    PM_REDIS_URL: redis://redis:6379/0
+    PM_ALLOWED_ORIGINS: '["http://localhost:${PM_WEB_PORT:-8080}","http://127.0.0.1:${PM_WEB_PORT:-8080}"]'
+  restart: unless-stopped
+
+x-dependencies: &dependencies
+  db:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  migrate:
+    condition: service_completed_successfully
+
+services:
+  db:
+    image: docker.io/library/postgres:17-alpine
+    environment:
+      POSTGRES_USER: presentation
+      POSTGRES_PASSWORD: local-demo-only
+      POSTGRES_DB: presentation_maker
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U presentation -d presentation_maker']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: docker.io/library/redis:7-alpine
+    command: [redis-server, --appendonly, 'yes', --maxmemory-policy, noeviction]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    <<: *backend
+    command: [alembic, upgrade, head]
+    restart: 'no'
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    # Only web exposes a host port; all peers on this private network are trusted.
+    # Do not use wildcard proxy trust when exposing the API directly.
+    command: [uvicorn, 'app.main:app', '--host=0.0.0.0', '--port=8000', '--no-access-log', '--proxy-headers', '--forwarded-allow-ips=*']
+    depends_on: *dependencies
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=8).read()"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 10s
+
+  worker:
+    <<: *backend
+    command: [celery, -A, 'app.worker:celery', worker, '--queues=celery', '--hostname=ml@%h', '--concurrency=1', '--loglevel=INFO']
+    depends_on: *dependencies
+    stop_grace_period: 26m
+    healthcheck:
+      test: [CMD-SHELL, 'celery -A app.worker:celery inspect ping --destination="ml@$$(hostname)" --timeout=3']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  maintenance:
+    <<: *backend
+    command: [celery, -A, 'app.worker:celery', worker, '--queues=pm.maintenance', '--hostname=maintenance@%h', '--concurrency=1', '--loglevel=INFO']
+    depends_on: *dependencies
+    stop_grace_period: 30s
+    healthcheck:
+      test: [CMD-SHELL, 'celery -A app.worker:celery inspect ping --destination="maintenance@$$(hostname)" --timeout=3']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  beat:
+    <<: *backend
+    command: [celery, -A, 'app.worker:celery', beat, '--loglevel=INFO', '--schedule=/app/run/celerybeat-schedule']
+    depends_on: *dependencies
+
+  web:
+    image: presentation-maker-web:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '127.0.0.1:${PM_WEB_PORT:-8080}:8080'
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+      maintenance:
+        condition: service_healthy
+      beat:
+        condition: service_started
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1:8080/healthz']
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:

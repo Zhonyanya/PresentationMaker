@@ -10,6 +10,8 @@ import { EditorPage } from '@/features/editor/EditorPage'
 import { ReadyCurtain } from '@/features/generation/ReadyCurtain'
 import { useFlowStore } from '@/store/flow-store'
 import { useEditorStore } from '@/store/editor-store'
+import { env } from '@/config/env'
+import { ServerApp } from '@/features/server/ServerApp'
 
 const TITLES = {
   create: 'Новая презентация',
@@ -18,6 +20,10 @@ const TITLES = {
 } as const
 
 export default function App() {
+  return env.apiMode === 'http' ? <ServerApp /> : <DemoApp />
+}
+
+function DemoApp() {
   const view = useFlowStore((s) => s.view)
   const hasPresentation = useEditorStore((s) => Boolean(s.presentation))
   // Редактор без презентации (например, черновик удалён) — возвращаемся к созданию

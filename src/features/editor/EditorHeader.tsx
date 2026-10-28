@@ -7,7 +7,7 @@ import { LIMITS } from '@/domain/presentation'
 
 interface EditorHeaderProps {
   title: string
-  onTitleChange: (title: string) => void
+  onTitleChange?: (title: string) => void
   onBack: () => void
   onExport: () => void
 }
@@ -30,8 +30,9 @@ export function EditorHeader({ title, onTitleChange, onBack, onExport }: EditorH
         <input
           id="presentation-title"
           value={title}
+          readOnly={!onTitleChange}
           maxLength={LIMITS.titleMax}
-          onChange={(e) => onTitleChange(e.target.value)}
+          onChange={(e) => onTitleChange?.(e.target.value)}
           placeholder="Без названия"
           className="h-9 w-full max-w-[520px] truncate rounded-lg border border-transparent bg-transparent px-2.5 font-display text-[18px] font-[400] tracking-[-0.01em] outline-none transition-[border-color,background-color] hover:border-border focus-visible:border-ring focus-visible:bg-card focus-visible:ring-[3px] focus-visible:ring-ring/20"
         />
@@ -40,7 +41,7 @@ export function EditorHeader({ title, onTitleChange, onBack, onExport }: EditorH
       <div className="flex shrink-0 items-center gap-3">
         <span className="hidden items-center gap-1.5 text-xs text-muted-foreground xl:flex" aria-live="polite">
           <Check className="size-3.5 text-success" aria-hidden />
-          Сохранено в браузере
+          {onTitleChange ? 'Сохранено в браузере' : 'Текущий документ сервера'}
         </span>
         <div className="max-md:hidden">
           <ModeBadges />

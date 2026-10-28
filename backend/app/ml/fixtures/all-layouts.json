@@ -1,0 +1,11 @@
+{
+  "title": "Тестовая презентация — не результат ML",
+  "slides": [
+    {"id":"fixture-title","layout":"title","title":"Тестовая презентация","subtitle":"Фикстура API","caption":"2026"},
+    {"id":"fixture-section","layout":"section","title":"Раздел","subtitle":"Все шесть макетов"},
+    {"id":"fixture-text","layout":"text","title":"Текст","body":"Первый абзац.\nВторой абзац.","notes":"Заметки докладчика"},
+    {"id":"fixture-bullets","layout":"bullets","title":"Список","bullets":["Первый пункт","Второй пункт"]},
+    {"id":"fixture-columns","layout":"two-column","title":"Сравнение","leftTitle":"Было","left":["Первое"],"rightTitle":"Стало","right":["Второе"]},
+    {"id":"fixture-closing","layout":"closing","title":"Спасибо за внимание","subtitle":"Конец фикстуры"}
+  ]
+}

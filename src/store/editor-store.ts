@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware'
 import { presentationSchema, type Presentation, type Slide, type SlideLayout } from '@/domain/presentation'
 import * as ops from '@/domain/operations'
 import { safeStorage } from '@/lib/storage'
+import { env } from '@/config/env'
 
 interface EditorState {
   presentation: Presentation | null
@@ -134,7 +135,10 @@ export const useEditorStore = create<EditorState>()(
     {
       name: 'ai-presentations:draft:v1',
       version: 1,
-      storage: createJSONStorage(() => safeStorage),
+      // Server documents never enter browser persistence; legacy demo drafts stay untouched.
+      storage: createJSONStorage(() => env.apiMode === 'http'
+        ? { getItem: () => null, setItem: () => {}, removeItem: () => {} }
+        : safeStorage),
       partialize: ({ presentation, selectedId, savedAt }) => ({ presentation, selectedId, savedAt }),
       // Повреждённый или устаревший черновик не должен ломать приложение
       merge: (persisted, current) => {

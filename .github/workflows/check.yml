@@ -1,0 +1,76 @@
+name: Checks
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm run schema && git diff --exit-code -- docs/*.schema.json
+      - run: npm audit --audit-level=high
+
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: presentation
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: presentation_ci_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U presentation -d presentation_ci_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      PM_TEST_DATABASE_URL: postgresql+psycopg://presentation:ci-only-password@127.0.0.1:5432/presentation_ci_test
+      PM_TEST_REDIS_URL: redis://127.0.0.1:6379/1
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.5'
+          python-version: '3.13'
+      - run: uv sync --locked
+      - run: uv run --locked ruff check app tests alembic
+      - run: uv run --locked pytest -q
+
+  deployment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.5'
+          python-version: '3.13'
+      - run: docker compose up --build -d --wait --wait-timeout 180
+      - run: curl --fail http://localhost:8080/api/v1/health/ready
+      - run: uv run --locked --with playwright python -m playwright install --with-deps chromium
+        working-directory: backend
+      - run: uv run --locked --with playwright python tests/browser_smoke.py
+        working-directory: backend
+        env:
+          PM_BROWSER_URL: http://localhost:8080
+      - if: failure()
+        run: docker compose ps -a && docker compose logs --tail=150
+      - if: always()
+        run: docker compose down

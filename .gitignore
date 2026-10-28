@@ -7,3 +7,9 @@ dist
 .DS_Store
 *.tsbuildinfo
 .claude
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+celerybeat-schedule*

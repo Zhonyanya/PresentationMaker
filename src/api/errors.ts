@@ -7,6 +7,10 @@ export type ApiErrorCode =
   | 'server' // 5xx или иная ошибка сервера
   | 'invalid_response' // ответ не соответствует контракту
   | 'unknown'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'not_found'
+  | 'conflict'
 
 const DEFAULT_MESSAGES: Record<ApiErrorCode, string> = {
   validation: 'Проверьте исходный текст и параметры презентации.',
@@ -17,6 +21,10 @@ const DEFAULT_MESSAGES: Record<ApiErrorCode, string> = {
   server: 'На сервере произошла ошибка. Попробуйте ещё раз чуть позже.',
   invalid_response: 'Сервер вернул данные в неожиданном формате. Сообщите об этом разработчикам.',
   unknown: 'Что-то пошло не так. Попробуйте ещё раз.',
+  unauthorized: 'Сессия истекла. Войдите снова.',
+  forbidden: 'Запрос отклонён. Обновите страницу и повторите вход.',
+  not_found: 'Презентация или задание не найдены.',
+  conflict: 'Документ изменился или уже обрабатывается. Обновите его.',
 }
 
 export class ApiError extends Error {

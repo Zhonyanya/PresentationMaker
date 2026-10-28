@@ -4,6 +4,7 @@ import { ApiError, presentationApi, type GenerationStageId } from '@/api'
 import { toApiError } from '@/api/errors'
 import { LIMITS, type GenerateRequest } from '@/domain/presentation'
 import { safeStorage } from '@/lib/storage'
+import { env } from '@/config/env'
 import { useEditorStore } from './editor-store'
 
 export type View = 'create' | 'generating' | 'editor'
@@ -104,7 +105,9 @@ export const useFlowStore = create<FlowState>()(
     }),
     {
       name: 'ai-presentations:source:v1',
-      storage: createJSONStorage(() => safeStorage),
+      storage: createJSONStorage(() => env.apiMode === 'http'
+        ? { getItem: () => null, setItem: () => {}, removeItem: () => {} }
+        : safeStorage),
       // Исходный текст и открытый редактор переживают обновление страницы.
       // Незавершённая генерация — нет: после перезагрузки возвращаемся к тексту.
       partialize: ({ draft, view }) => ({ draft, view: view === 'editor' ? view : 'create' }),

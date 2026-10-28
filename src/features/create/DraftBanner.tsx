@@ -8,6 +8,7 @@ interface DraftBannerProps {
   savedAt: string | null
   onContinue: () => void
   onDiscard: () => void
+  serverMode?: boolean
 }
 
 function formatSavedAt(savedAt: string | null): string {
@@ -19,7 +20,7 @@ function formatSavedAt(savedAt: string | null): string {
     : date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
 }
 
-export function DraftBanner({ title, slideCount, savedAt, onContinue, onDiscard }: DraftBannerProps) {
+export function DraftBanner({ title, slideCount, savedAt, onContinue, onDiscard, serverMode }: DraftBannerProps) {
   return (
     <div className="flex flex-col gap-4 border border-foreground/80 bg-card px-5 py-4 animate-in fade-in-0 duration-700 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-center gap-3">
@@ -34,10 +35,10 @@ export function DraftBanner({ title, slideCount, savedAt, onContinue, onDiscard 
       </div>
       <div className="flex shrink-0 gap-2">
         <Button variant="ghost" size="sm" onClick={onDiscard}>
-          Удалить черновик
+          {serverMode ? 'Скрыть из формы' : 'Удалить черновик'}
         </Button>
         <Button size="sm" onClick={onContinue}>
-          Продолжить редактирование
+          {serverMode ? 'Открыть презентацию' : 'Продолжить редактирование'}
         </Button>
       </div>
     </div>

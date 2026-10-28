@@ -20,11 +20,12 @@ interface SlideCanvasProps {
   index: number
   total: number
   activeField: string | null
+  readOnly?: boolean
 }
 
 const PADDING = 40
 
-export function SlideCanvas({ slide, scene, index, total, activeField }: SlideCanvasProps) {
+export function SlideCanvas({ slide, scene, index, total, activeField, readOnly }: SlideCanvasProps) {
   const [ref, size] = useElementSize<HTMLDivElement>()
   const selectByOffset = useEditorStore((s) => s.selectByOffset)
   const { split } = useSlideActions()
@@ -90,7 +91,7 @@ export function SlideCanvas({ slide, scene, index, total, activeField }: SlideCa
                 transition={{ duration: 0.6, ease: EASE_OUT_EXPO }}
                 className="shadow-slide ring-1 ring-foreground/5"
               >
-                <SlideRenderer scene={scene} scale={scale} showPlaceholders activeField={activeField} onFieldClick={focusField} />
+                <SlideRenderer scene={scene} scale={scale} showPlaceholders activeField={activeField} onFieldClick={readOnly ? undefined : focusField} />
               </motion.div>
             </AnimatePresence>
           </div>
@@ -112,7 +113,7 @@ export function SlideCanvas({ slide, scene, index, total, activeField }: SlideCa
               слайд.
             </span>
           </p>
-          {canSplitSlide(slide) && (
+          {!readOnly && canSplitSlide(slide) && (
             <Button variant="outline" size="sm" className="shrink-0" onClick={() => split(slide.id)}>
               <Scissors />
               Разделить слайд

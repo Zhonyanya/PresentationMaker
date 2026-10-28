@@ -2,7 +2,7 @@ import { useId, useRef, useState, type FormEvent } from 'react'
 import { motion, useReducedMotion, useScroll, useTransform } from 'motion/react'
 import { ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
-import { generateRequestSchema, LIMITS } from '@/domain/presentation'
+import { generateRequestSchema, LIMITS, type GenerateRequest } from '@/domain/presentation'
 import { demoExamples, type DemoExample } from '@/data/demo-examples'
 import { useFlowStore } from '@/store/flow-store'
 import { useEditorStore } from '@/store/editor-store'
@@ -60,7 +60,11 @@ function SectionLabel({ number, title, aside }: { number: string; title: string;
   )
 }
 
-export function CreatePage() {
+export function CreatePage({ onGenerate, onOpenCurrent, serverMode = false }: {
+  onGenerate?: (request: GenerateRequest) => void
+  onOpenCurrent?: () => void
+  serverMode?: boolean
+} = {}) {
   const titleId = useId()
   const textId = useId()
   const workspaceRef = useRef<HTMLDivElement>(null)
@@ -102,7 +106,8 @@ export function CreatePage() {
       return
     }
     setErrors({})
-    void generate()
+    if (onGenerate) onGenerate(result.data)
+    else void generate()
   }
 
   const curtain = useJumpCurtain()
@@ -228,10 +233,12 @@ export function CreatePage() {
               title={savedPresentation.title}
               slideCount={savedPresentation.slides.length}
               savedAt={savedAt}
-              onContinue={openEditor}
+              onContinue={onOpenCurrent ?? openEditor}
+              serverMode={serverMode}
               onDiscard={() => {
                 const backup = savedPresentation
                 closeEditor()
+                if (serverMode) return
                 toast('Черновик удалён', {
                   duration: 8000,
                   action: { label: 'Вернуть', onClick: () => useEditorStore.getState().load(backup) },
