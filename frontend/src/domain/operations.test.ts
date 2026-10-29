@@ -1,7 +1,68 @@
 import { describe, expect, it } from 'vitest'
 import { samplePresentation } from '@/test/fixtures'
-import { canSplitSlide, convertSlide, createSlide, duplicateSlide, insertSlide, moveSlide, removeSlide, splitSlide, updateSlide } from './operations'
-import { presentationSchema, SLIDE_LAYOUTS } from './presentation'
+import {
+  canSplitSlide,
+  convertLosesContent,
+  convertSlide,
+  createSlide,
+  duplicateSlide,
+  fitPresentation,
+  fitSlide,
+  insertSlide,
+  MAX_SLIDES,
+  moveSlide,
+  removeSlide,
+  splitSlide,
+  updateSlide,
+} from './operations'
+import { presentationSchema, slideSchema, SLIDE_LAYOUTS, type Slide } from './presentation'
+
+const long = (n: number) => 'я'.repeat(n)
+const list = (n: number) => Array.from({ length: n }, (_, i) => `Пункт ${i + 1}`)
+
+describe('пределы схемы в редакторе', () => {
+  it('fitSlide приводит перегруженный слайд любого макета к схеме', () => {
+    const oversized: Slide[] = [
+      { id: 'a', layout: 'title', title: long(500), subtitle: long(900), caption: long(500), notes: long(20_000) },
+      { id: 'b', layout: 'text', title: long(500), body: long(9000) },
+      { id: 'c', layout: 'bullets', title: 'x', bullets: [...list(20), long(3000)] },
+      { id: 'd', layout: 'two-column', title: 'x', leftTitle: long(300), rightTitle: long(300), left: list(30), right: list(30) },
+      { id: 'e', layout: 'section', title: 'x', subtitle: long(900) },
+      { id: 'f', layout: 'closing', title: 'x', subtitle: long(900) },
+    ]
+    for (const slide of oversized) expect(slideSchema.safeParse(fitSlide(slide)).success, slide.layout).toBe(true)
+  })
+
+  it('fitSlide и fitPresentation не трогают документ в пределах схемы', () => {
+    const presentation = samplePresentation()
+    expect(fitPresentation(presentation)).toBe(presentation)
+    for (const slide of presentation.slides) expect(fitSlide(slide)).toBe(slide)
+  })
+
+  it('смена две колонки → список с 24 пунктами даёт валидный слайд и сообщает об обрезке', () => {
+    const slide: Slide = { id: 'tc', layout: 'two-column', title: 'Сравнение', left: list(12), right: list(12) }
+    const converted = convertSlide(slide, 'bullets')
+    expect(slideSchema.safeParse(converted).success).toBe(true)
+    expect(convertLosesContent(slide, 'bullets')).toBe(true)
+    expect(convertLosesContent({ ...slide, left: list(3), right: list(3) }, 'bullets')).toBe(false)
+  })
+
+  it('разделение слайда с заголовком у предела не выходит за схему', () => {
+    const base = samplePresentation()
+    const slides = base.slides.map((s) => (s.id === 's4' ? { ...s, title: long(198) } : s))
+    const { presentation, newId } = splitSlide({ ...base, slides }, 's4')
+    expect(newId).not.toBeNull()
+    expect(presentationSchema.safeParse(presentation).success).toBe(true)
+  })
+
+  it('не даёт превысить 60 слайдов', () => {
+    const base = samplePresentation()
+    const full = { ...base, slides: Array.from({ length: MAX_SLIDES }, (_, i) => ({ ...base.slides[3], id: `n${i}` })) }
+    expect(insertSlide(full, createSlide('text'), 0)).toBe(full)
+    expect(duplicateSlide(full, 'n0').newId).toBeNull()
+    expect(splitSlide(full, 'n0').newId).toBeNull()
+  })
+})
 
 describe('операции редактора', () => {
   it('не мутируют исходную презентацию', () => {

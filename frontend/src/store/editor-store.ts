@@ -19,10 +19,11 @@ interface EditorState {
   setTitle: (title: string) => void
   updateSlide: (id: string, patch: Partial<Slide>) => void
   /** Возвращает слайд до изменения — для «Отменить» */
-  changeLayout: (id: string, layout: SlideLayout) => { previous: Slide; converted: Slide } | null
+  changeLayout: (id: string, layout: SlideLayout) => { previous: Slide; converted: Slide; trimmed: boolean } | null
   replaceSlide: (slide: Slide) => void
-  addSlide: (layout: SlideLayout, afterId?: string | null) => string
-  duplicateSlide: (id: string) => void
+  /** null — в документе уже предельное число слайдов */
+  addSlide: (layout: SlideLayout, afterId?: string | null) => string | null
+  duplicateSlide: (id: string) => boolean
   /** Возвращает удалённый слайд и его позицию — для «Отменить» */
   removeSlide: (id: string) => { slide: Slide; index: number } | null
   restoreSlide: (slide: Slide, index: number) => void
@@ -32,12 +33,23 @@ interface EditorState {
 
 const now = () => new Date().toISOString()
 
+function repairDraft(value: unknown): unknown {
+  try {
+    const draft = value as Presentation
+    if (typeof draft?.title !== 'string' || !Array.isArray(draft.slides)) return value
+    return ops.fitPresentation(draft)
+  } catch {
+    return value
+  }
+}
+
 export const useEditorStore = create<EditorState>()(
   persist(
     (set, get) => {
       /** Применяет изменение презентации и обновляет отметку автосохранения */
+      // Документ всегда держится в пределах схемы — иначе сохранённый черновик не загрузится
       const commit = (presentation: Presentation, selectedId = get().selectedId) =>
-        set({ presentation, selectedId, savedAt: now() })
+        set({ presentation: ops.fitPresentation(presentation), selectedId, savedAt: now() })
 
       return {
         presentation: null,
@@ -74,7 +86,7 @@ export const useEditorStore = create<EditorState>()(
           if (!presentation || !slide || slide.layout === layout) return null
           const converted = ops.convertSlide(slide, layout)
           commit(ops.replaceSlide(presentation, converted))
-          return { previous: slide, converted }
+          return { previous: slide, converted, trimmed: ops.convertLosesContent(slide, layout) }
         },
 
         replaceSlide: (slide) => {
@@ -86,6 +98,7 @@ export const useEditorStore = create<EditorState>()(
           const { presentation, selectedId } = get()
           const slide = ops.createSlide(layout)
           if (!presentation) return slide.id
+          if (presentation.slides.length >= ops.MAX_SLIDES) return null
           const anchor = afterId ?? selectedId
           const index = presentation.slides.findIndex((s) => s.id === anchor)
           commit(ops.insertSlide(presentation, slide, index === -1 ? presentation.slides.length : index + 1), slide.id)
@@ -94,9 +107,11 @@ export const useEditorStore = create<EditorState>()(
 
         duplicateSlide: (id) => {
           const { presentation } = get()
-          if (!presentation) return
+          if (!presentation) return false
           const result = ops.duplicateSlide(presentation, id)
-          if (result.newId) commit(result.presentation, result.newId)
+          if (!result.newId) return false
+          commit(result.presentation, result.newId)
+          return true
         },
 
         removeSlide: (id) => {
@@ -143,7 +158,9 @@ export const useEditorStore = create<EditorState>()(
       // Повреждённый или устаревший черновик не должен ломать приложение
       merge: (persisted, current) => {
         const state = persisted as Partial<EditorState> | undefined
-        const parsed = presentationSchema.safeParse(state?.presentation)
+        let parsed = presentationSchema.safeParse(state?.presentation)
+        // Черновик из прошлой версии мог выйти за пределы схемы — обрезаем, а не теряем целиком
+        if (!parsed.success) parsed = presentationSchema.safeParse(repairDraft(state?.presentation))
         if (!parsed.success) return current
         const selectedId = parsed.data.slides.some((s) => s.id === state?.selectedId)
           ? (state?.selectedId ?? null)

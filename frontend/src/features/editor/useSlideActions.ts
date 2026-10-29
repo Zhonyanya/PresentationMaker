@@ -1,11 +1,13 @@
 import { useCallback } from 'react'
 import { toast } from 'sonner'
 import type { SlideLayout } from '@/domain/presentation'
+import { MAX_SLIDES } from '@/domain/operations'
 import { getLayout } from '@/layouts/registry'
 import { useEditorStore } from '@/store/editor-store'
 
 /** Уведомления с «Отменить» живут дольше — чтобы успеть нажать */
 const UNDO_TOAST_MS = 8000
+const LIMIT_MESSAGE = `В презентации уже ${MAX_SLIDES} слайдов — это максимум`
 
 /** Действия со слайдами с обратной связью и возможностью отмены. */
 export function useSlideActions() {
@@ -13,13 +15,16 @@ export function useSlideActions() {
     requestAnimationFrame(() => document.getElementById(`field-${key}`)?.focus({ preventScroll: false }))
 
   const add = useCallback((layout: SlideLayout, afterId?: string | null) => {
-    useEditorStore.getState().addSlide(layout, afterId)
+    if (useEditorStore.getState().addSlide(layout, afterId) === null) {
+      toast.error(LIMIT_MESSAGE)
+      return
+    }
     focusField()
   }, [])
 
   const duplicate = useCallback((id: string) => {
-    useEditorStore.getState().duplicateSlide(id)
-    toast.success('Слайд продублирован')
+    if (useEditorStore.getState().duplicateSlide(id)) toast.success('Слайд продублирован')
+    else toast.error(LIMIT_MESSAGE)
   }, [])
 
   const remove = useCallback((id: string) => {
@@ -47,7 +52,9 @@ export function useSlideActions() {
     const result = useEditorStore.getState().changeLayout(id, layout)
     if (!result) return
     toast(`Макет: «${getLayout(layout).label}»`, {
-      description: 'Текст перенесён в новый макет',
+      description: result.trimmed
+        ? 'Часть текста не поместилась в макет и обрезана. Нажмите «Отменить», чтобы вернуть.'
+        : 'Текст перенесён в новый макет',
       duration: UNDO_TOAST_MS,
       action: {
         label: 'Отменить',
@@ -66,7 +73,9 @@ export function useSlideActions() {
   }, [])
 
   const split = useCallback((id: string) => {
-    if (useEditorStore.getState().splitSlide(id)) toast.success('Слайд разделён на два')
+    const { presentation, splitSlide } = useEditorStore.getState()
+    if (splitSlide(id)) toast.success('Слайд разделён на два')
+    else if ((presentation?.slides.length ?? 0) >= MAX_SLIDES) toast.error(LIMIT_MESSAGE)
   }, [])
 
   const move = useCallback((id: string, delta: number) => {

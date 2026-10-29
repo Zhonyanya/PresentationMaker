@@ -25,6 +25,16 @@ const api = createServerApi({ baseUrl: env.apiBaseUrl })
 const referenceKey = (user: ServerUser) => `pm:current:${user.id}`
 const PHASES: Record<JobStatus['phase'], string> = { waiting: 'В очереди', ml: 'Выполняется ML', validation: 'Проверяем результат', saving: 'Сохраняем', done: 'Завершено' }
 
+/** Poll failures worth retrying: the job keeps running on the server meanwhile. */
+const TRANSIENT = new Set(['network', 'timeout', 'server', 'rate_limited'])
+const POLL_RETRIES = 5
+
+/** crypto.randomUUID exists only in secure contexts (HTTPS/localhost); getRandomValues works everywhere. */
+function randomKey(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 /** Only references are persisted, never source text, commands, passwords or documents. */
 function saveReference(user: ServerUser, presentationId: string, job: AcceptedJob | null) {
   safeStorage.setItem(referenceKey(user), JSON.stringify({ presentationId, job }))
@@ -76,10 +86,18 @@ function Workspace() {
   const restore = useCallback(async (account: ServerUser, activeEpoch: number) => {
     const raw = await safeStorage.getItem(referenceKey(account))
     if (!raw) return
+    let presentationId: string
     try {
       const reference: unknown = JSON.parse(raw)
-      if (!reference || typeof reference !== 'object' || !('presentationId' in reference) || typeof reference.presentationId !== 'string') return
-      const value = await api.current(reference.presentationId)
+      if (!reference || typeof reference !== 'object' || !('presentationId' in reference) || typeof reference.presentationId !== 'string') throw new Error('bad reference')
+      presentationId = reference.presentationId
+    } catch {
+      // Испорченную ссылку не показываем ошибкой при каждом входе — просто забываем
+      safeStorage.removeItem(referenceKey(account))
+      return
+    }
+    try {
+      const value = await api.current(presentationId)
       if (activeEpoch !== epoch.current) return
       applyCurrent(value)
       // Server active_job is authoritative; completed jobs need no resumed polling.
@@ -88,7 +106,11 @@ function Workspace() {
       setEditor(Boolean(value.document))
       saveReference(account, value.presentation_id, value.active_job)
     } catch (cause) {
-      if (activeEpoch === epoch.current) setError(toApiError(cause).message)
+      if (activeEpoch !== epoch.current) return
+      const error = toApiError(cause)
+      // Презентации больше нет — ссылка устарела, ошибка тут не нужна
+      if (error.code === 'not_found') safeStorage.removeItem(referenceKey(account))
+      else setError(error.message)
     }
   }, [applyCurrent])
 
@@ -114,38 +136,52 @@ function Workspace() {
       if (!userRef.current) return
       clearPrivate(); setError('Сессия истекла. Войдите снова.')
     }
-    const changed = (event: StorageEvent) => {
-      if (event.key === 'pm:auth-change') { clearPrivate(); void bootstrap() }
-    }
     // Covers cookie changes made outside this app, as well as session expiry in a background tab.
-    const focus = async () => {
+    // The same user signing in again elsewhere keeps this tab's unsent work; only the CSRF token
+    // of the rotated session is refetched.
+    const recheck = async () => {
       try {
         const account = await api.me()
         if (account.id !== userRef.current?.id) { clearPrivate(); void bootstrap() }
+        else api.resetCsrf()
       } catch { /* 401 is handled by the shared event; transient network failure keeps the view. */ }
     }
+    const changed = (event: StorageEvent) => {
+      if (event.key === 'pm:auth-change') void recheck()
+    }
+    const focus = () => void recheck()
     window.addEventListener('pm:unauthorized', unauthorized)
     window.addEventListener('storage', changed)
     window.addEventListener('focus', focus)
     return () => { mounted = false; window.removeEventListener('pm:unauthorized', unauthorized); window.removeEventListener('storage', changed); window.removeEventListener('focus', focus) }
   }, [clearPrivate, restore])
 
+  const jobId = job?.job_id
+  const jobPresentationId = job?.presentation_id
   useEffect(() => {
-    if (!job || !user || !waiting) return
+    if (!jobId || !jobPresentationId || !user || !waiting) return
     const controller = new AbortController()
     const activeEpoch = epoch.current
     let timer: ReturnType<typeof setTimeout>
+    let failures = 0
+    const later = (ms: number) => { timer = setTimeout(() => void poll(), ms) }
     const poll = async () => {
       try {
-        const status = await api.status(job.job_id, controller.signal)
+        const status = await api.status(jobId, controller.signal)
         if (controller.signal.aborted || activeEpoch !== epoch.current) return
+        failures = 0
         setPhase(status.phase)
         if (status.status === 'queued' || status.status === 'running') {
-          timer = setTimeout(() => void poll(), globalThis.document.hidden ? 10000 : 2500)
+          later(globalThis.document.hidden ? 10000 : 2500)
           return
         }
-        const value = await api.current(job.presentation_id, controller.signal)
+        const value = await api.current(jobPresentationId, controller.signal)
         if (controller.signal.aborted || activeEpoch !== epoch.current) return
+        // Документ ещё не успел отметить завершение этого задания — спросим чуть позже
+        if (value.active_job?.job_id === jobId) {
+          later(2500)
+          return
+        }
         applyCurrent(value)
         setJob(value.active_job); setWaiting(Boolean(value.active_job))
         saveReference(user, value.presentation_id, value.active_job)
@@ -156,13 +192,20 @@ function Workspace() {
         } else setError(status.error?.message ?? 'Задание завершилось с ошибкой. Предыдущий документ сохранён.')
       } catch (cause) {
         if (controller.signal.aborted || activeEpoch !== epoch.current) return
-        setError(`${toApiError(cause).message} Остановка ожидания не отменяет задание.`)
+        const error = toApiError(cause)
+        // Разовый сбой сети или прокси не повод бросать ожидание: повторяем с растущей паузой
+        if (TRANSIENT.has(error.code) && failures < POLL_RETRIES) {
+          failures++
+          later(Math.min(2500 * 2 ** failures, 30000))
+          return
+        }
+        setError(`${error.message} Остановка ожидания не отменяет задание.`)
         setWaiting(false)
       }
     }
     void poll()
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [job, user, waiting, applyCurrent])
+  }, [jobId, jobPresentationId, user, waiting, applyCurrent])
 
   const authenticate = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError('')
@@ -172,7 +215,7 @@ function Workspace() {
       if (activeEpoch !== epoch.current) return
       clearPrivate()
       userRef.current = account; setUser(account)
-      safeStorage.setItem('pm:auth-change', crypto.randomUUID())
+      safeStorage.setItem('pm:auth-change', randomKey())
       await restore(account, epoch.current)
     } catch (cause) { if (activeEpoch === epoch.current) setError(toApiError(cause).message) }
     finally { setPassword(''); setBusy(false) }
@@ -183,13 +226,17 @@ function Workspace() {
     try {
       await api.logout()
       clearPrivate()
-      safeStorage.setItem('pm:auth-change', crypto.randomUUID())
+      safeStorage.setItem('pm:auth-change', randomKey())
     } catch (cause) { setError(toApiError(cause).message) }
     finally { setBusy(false) }
   }
 
   const launch = async (operation: 'generate' | 'revise', body?: GenerateRequest) => {
-    if (!user || busy || job) return
+    if (!user || busy) return
+    if (job) {
+      setError('Дождитесь завершения текущего задания — оно ещё выполняется на сервере.')
+      return
+    }
     const activeEpoch = epoch.current
     setBusy(true); setError('')
     try {
@@ -198,7 +245,7 @@ function Workspace() {
         throw new Error('Введите команду и уникальные номера существующих слайдов через запятую.')
       }
       const signature = JSON.stringify({ operation, body, instruction, numbers, id: current?.presentation_id, token: current?.document_token })
-      if (submission.current?.signature !== signature) submission.current = { signature, key: crypto.randomUUID() }
+      if (submission.current?.signature !== signature) submission.current = { signature, key: randomKey() }
       const key = submission.current.key
       const accepted = operation === 'generate' && body ? await api.generate(body, key, undefined, current ?? undefined)
         : await api.revise(current!, instruction, numbers, key)
@@ -231,7 +278,8 @@ function Workspace() {
     onSubmit={(e) => void authenticate(e)} />
 
   const document = current?.document
-  const selectedIndex = document?.slides.findIndex((s) => s.id === selected?.id) ?? 0
+  // Store and server state update separately; for one render the selection may point to another document
+  const selectedIndex = Math.max(0, document?.slides.findIndex((s) => s.id === selected?.id) ?? 0)
   return <>
     <div className="flex flex-wrap items-center justify-end gap-3 border-b bg-background px-5 py-2 text-sm">
       <span>{user.login}</span>
@@ -256,7 +304,7 @@ function Workspace() {
             <span className="text-xs">{index + 1}. {slide.title}</span><div className="pointer-events-none"><SlideRenderer scene={scenes[index]} scale={176 / SLIDE_PX.width} /></div>
           </button>)}
         </nav>
-        <SlideCanvas slide={selected} scene={scenes[selectedIndex]} index={selectedIndex} total={document.slides.length} activeField={null} readOnly />
+        <SlideCanvas slide={document.slides[selectedIndex] ?? selected} scene={scenes[selectedIndex]} index={selectedIndex} total={document.slides.length} activeField={null} readOnly />
         <aside className="space-y-5 border-l p-5">
           <h2 className="font-display text-2xl">Правка командой</h2>
           <p className="text-sm text-muted-foreground">Изменения выполняет ML. Пока задача не завершится успешно, прежний результат доступен для просмотра и экспорта.</p>

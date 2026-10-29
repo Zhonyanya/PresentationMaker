@@ -17,6 +17,8 @@ function Slider({ className, ...props }: React.ComponentProps<typeof SliderPrimi
         <SliderPrimitive.Thumb
           key={i}
           aria-label={props['aria-label']}
+          // Имя доступно на самом ползунке, иначе экранный диктор читает его без подписи
+          aria-labelledby={props['aria-labelledby']}
           className="block size-4 shrink-0 rounded-full border border-foreground bg-card transition-transform duration-300 hover:scale-125 focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-card focus-visible:outline-none active:scale-110"
         />
       ))}

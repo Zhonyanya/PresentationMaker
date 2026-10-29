@@ -84,5 +84,5 @@ def revise(*, document, text, slideCount, instruction, target_slide_numbers,
 
 - [Серверные схемы и инварианты](backend/app/presentations/schemas.py), [адаптер вызова](backend/app/ml/adapter.py).
 - [JSON Schema результата](docs/generate-response.schema.json) описывает форму генерации, но не все ограничения UTF-16, ID и области правки.
-- [Каноническая frontend-схема](src/domain/presentation.ts); [фикстура всех макетов](backend/app/ml/fixtures/all-layouts.json).
+- [Каноническая frontend-схема](frontend/src/domain/presentation.ts); [фикстура всех макетов](backend/app/ml/fixtures/all-layouts.json).
 - [Архитектура и запуск приложения](README.md).

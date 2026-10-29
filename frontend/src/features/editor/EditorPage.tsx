@@ -41,8 +41,12 @@ export function EditorPage() {
       // На кнопках и других элементах управления стрелки и Delete не перехватываем
       if (!onSlideOption && target.closest?.('button, a, [role="radio"], [role="slider"], [role="switch"]')) return
       const id = useEditorStore.getState().selectedId
-      const up = event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'ArrowLeft'
-      const down = event.key === 'ArrowDown' || event.key === 'PageDown' || event.key === 'ArrowRight'
+      const up = event.key === 'ArrowUp' || event.key === 'ArrowLeft'
+      const down = event.key === 'ArrowDown' || event.key === 'ArrowRight'
+      // Alt+←/→ — «назад/вперёд» браузера; переставляем слайд только Alt+↑/↓
+      if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) return
+      // Если страница прокручивается (узкий экран), стрелки вне списка слайдов оставляем прокрутке
+      if ((up || down) && !onSlideOption && document.documentElement.scrollHeight > window.innerHeight + 1) return
       if ((up || down) && event.altKey && id) {
         event.preventDefault()
         move(id, up ? -1 : 1)

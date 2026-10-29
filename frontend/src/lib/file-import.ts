@@ -50,14 +50,23 @@ async function readDocx(file: File): Promise<string> {
   }
 }
 
+/** Текст узла без вложенных списков: у пункта со вложенным списком подпункты идут отдельными строками */
+function ownText(node: Element): string {
+  const copy = node.cloneNode(true) as Element
+  copy.querySelectorAll('ul, ol').forEach((list) => list.remove())
+  return copy.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+}
+
 /** Заголовки → «# …», пункты списков → «- …», абзацы → строки через пустую строку. */
 export function htmlToStructuredText(html: string): string {
   const doc = new DOMParser().parseFromString(html, 'text/html')
   const lines: string[] = []
   doc.body.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li').forEach((node) => {
-    const text = node.textContent?.replace(/\s+/g, ' ').trim()
-    if (!text) return
     const tag = node.tagName.toLowerCase()
+    // Абзац внутри пункта списка уже вошёл в текст пункта
+    if (tag !== 'li' && node.closest('li')) return
+    const text = ownText(node)
+    if (!text) return
     if (tag === 'li') lines.push(`- ${text}`)
     else if (tag.startsWith('h')) lines.push('', `${'#'.repeat(Math.min(Number(tag[1]), 2))} ${text}`)
     else lines.push(text, '')

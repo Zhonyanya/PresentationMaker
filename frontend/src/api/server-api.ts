@@ -36,13 +36,23 @@ export function createServerApi(config: { baseUrl: string; fetch?: typeof fetch;
         ...init, credentials: 'include', cache: 'no-store', signal: controller.signal,
         headers: { Accept: 'application/json', ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
       })
-      const body: unknown = response.status === 204 ? null : await response.json()
+      // Прокси (nginx) отвечает на 413/502/504 HTML-страницей — код ошибки берём из статуса
+      const raw = response.status === 204 ? '' : await response.text()
+      let body: unknown = null
+      let malformed = false
+      if (raw) {
+        try { body = JSON.parse(raw) } catch { malformed = true }
+      }
       if (epoch !== identity) throw new ApiError('aborted')
       if (!response.ok) {
         const parsed = z.object({ error: z.object({ code: z.string(), message: z.string() }), request_id: z.string().optional() }).safeParse(body)
         const code = response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden'
           : response.status === 404 ? 'not_found' : response.status === 409 ? 'conflict'
-            : response.status === 429 ? 'rate_limited' : response.status === 422 || response.status === 400 ? 'validation' : 'server'
+            : response.status === 429 ? 'rate_limited' : response.status === 408 || response.status === 504 ? 'timeout'
+              : [400, 413, 422].includes(response.status) ? 'validation' : 'server'
+        if (response.status === 413 && !parsed.success) {
+          throw new ApiError('validation', { status: 413, message: 'Запрос слишком большой. Сократите текст и попробуйте снова.' })
+        }
         if (response.status === 401 && path !== '/auth/login') {
           csrfToken = null
           globalThis.dispatchEvent?.(new Event('pm:unauthorized'))
@@ -50,6 +60,7 @@ export function createServerApi(config: { baseUrl: string; fetch?: typeof fetch;
         throw new ApiError(code, { status: response.status, message: parsed.success ? parsed.data.error.message : undefined,
           details: parsed.success ? { code: parsed.data.error.code, request_id: parsed.data.request_id } : undefined })
       }
+      if (malformed) throw new ApiError('invalid_response')
       const parsed = schema.safeParse(body)
       if (!parsed.success) throw new ApiError('invalid_response')
       return parsed.data
@@ -70,13 +81,28 @@ export function createServerApi(config: { baseUrl: string; fetch?: typeof fetch;
   }
 
   async function post<T>(path: string, body: unknown, schema: z.ZodType<T>, key?: string, signal?: AbortSignal) {
-    if (!csrfToken) await csrf()
-    return request(path, schema, { method: 'POST', body: JSON.stringify(body), signal,
-      headers: { 'X-CSRF-Token': csrfToken!, ...(key ? { 'Idempotency-Key': key } : {}) } })
+    const send = async () => {
+      if (!csrfToken) await csrf()
+      return request(path, schema, { method: 'POST', body: JSON.stringify(body), signal,
+        headers: { 'X-CSRF-Token': csrfToken!, ...(key ? { 'Idempotency-Key': key } : {}) } })
+    }
+    try {
+      return await send()
+    } catch (error) {
+      // Токен устарел (например, сессию обновили в другой вкладке): берём новый и повторяем один раз.
+      // Отклонённый CSRF-запрос сервер не выполнял, так что повтор безопасен.
+      const rejected = error instanceof ApiError && error.code === 'forbidden'
+        && (error.details as { code?: string } | undefined)?.code === 'CSRF_REJECTED'
+      if (!rejected || signal?.aborted) throw error
+      csrfToken = null
+      return send()
+    }
   }
 
   return {
     forget() { identity++; csrfToken = null },
+    /** Сессия могла смениться в другой вкладке — CSRF-токен запросить заново перед следующим POST */
+    resetCsrf() { csrfToken = null },
     async me() { return (await request('/auth/me', z.object({ user: userSchema }))).user },
     async authenticate(kind: 'login' | 'register', login: string, password: string) {
       // Always obtain the current preliminary session, including after another tab logs in/out.

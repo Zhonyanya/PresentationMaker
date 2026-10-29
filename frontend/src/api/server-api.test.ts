@@ -39,6 +39,33 @@ describe('серверный контракт v1', () => {
     await expect(api.current(id)).rejects.toMatchObject({ code, status })
   })
 
+  it.each([[502, 'server'], [504, 'timeout'], [413, 'validation']])('HTML-ответ прокси %i даёт понятную ошибку, а не «неверный формат»', async (status, code) => {
+    const api = createServerApi({ baseUrl: '', fetch: vi.fn(async () => new Response('<html>nginx</html>', { status: Number(status) })) })
+    await expect(api.current(id)).rejects.toMatchObject({ code, status })
+  })
+
+  it('при устаревшем CSRF-токене берёт новый и повторяет запрос один раз', async () => {
+    const accepted = { presentation_id: id, job_id: id, status_url: `/api/v1/jobs/${id}` }
+    const mock = vi.fn()
+      .mockResolvedValueOnce(json({ csrf_token: 'old' }))
+      .mockResolvedValueOnce(json({ error: { code: 'CSRF_REJECTED', message: 'Обновите сессию' } }, 403))
+      .mockResolvedValueOnce(json({ csrf_token: 'new' }))
+      .mockResolvedValueOnce(json(accepted, 202))
+    const api = createServerApi({ baseUrl: '', fetch: mock })
+    await expect(api.generate({ text: 'я'.repeat(100), slideCount: 8 }, 'same-key')).resolves.toMatchObject({ job_id: id })
+    expect(mock).toHaveBeenCalledTimes(4)
+    expect(mock.mock.calls[3][1]).toMatchObject({ headers: { 'X-CSRF-Token': 'new', 'Idempotency-Key': 'same-key' } })
+  })
+
+  it('другие 403 не повторяет', async () => {
+    const mock = vi.fn()
+      .mockResolvedValueOnce(json({ csrf_token: 'csrf' }))
+      .mockResolvedValue(json({ error: { code: 'ORIGIN_REJECTED', message: 'Нет' } }, 403))
+    const api = createServerApi({ baseUrl: '', fetch: mock })
+    await expect(api.generate({ text: 'я'.repeat(100), slideCount: 8 }, 'k')).rejects.toMatchObject({ code: 'forbidden' })
+    expect(mock).toHaveBeenCalledTimes(2)
+  })
+
   it('не принимает невалидный документ и не нормализует ID повторно', async () => {
     const api = createServerApi({ baseUrl: '', fetch: vi.fn(async () => json({ presentation_id: id, document, document_token: 'token', requested_slide_count: 8, slide_count: 6, active_job: null })) })
     expect((await api.current(id)).document?.slides.map((s) => s.id)).toEqual(document.slides.map((s: { id: string }) => s.id))
