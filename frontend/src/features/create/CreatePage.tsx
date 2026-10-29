@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type FormEvent } from 'react'
+import { useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { motion, useReducedMotion, useScroll, useTransform } from 'motion/react'
 import { ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
@@ -60,10 +60,16 @@ function SectionLabel({ number, title, aside }: { number: string; title: string;
   )
 }
 
-export function CreatePage({ onGenerate, onOpenCurrent, serverMode = false }: {
+export function CreatePage({ onGenerate, onOpenCurrent, serverMode = false, headerSlot, notice, startAtWorkspace = false }: {
   onGenerate?: (request: GenerateRequest) => void
   onOpenCurrent?: () => void
   serverMode?: boolean
+  /** Дополнительные элементы шапки — например, аккаунт в серверном режиме */
+  headerSlot?: ReactNode
+  /** Сообщение над рабочей областью: ошибка или статус задания */
+  notice?: ReactNode
+  /** Открыть сразу на рабочей области, а не на обложке — при возврате из редактора или ожидания */
+  startAtWorkspace?: boolean
 } = {}) {
   const titleId = useId()
   const textId = useId()
@@ -85,6 +91,8 @@ export function CreatePage({ onGenerate, onOpenCurrent, serverMode = false }: {
   const headlineOpacity = useTransform(scrollY, [0, 520], [1, reduceMotion ? 1 : 0.35])
   const deckY = useTransform(scrollY, [0, 700], [0, reduceMotion ? 0 : 50])
   useSmoothScroll(!reduceMotion)
+  // Только при первом показе: дальше пользователь прокручивает сам
+  useLayoutEffect(() => { if (startAtWorkspace) jumpTo(workspaceRef.current) }, [])
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault()
@@ -143,7 +151,7 @@ export function CreatePage({ onGenerate, onOpenCurrent, serverMode = false }: {
     <div className="min-h-dvh">
       <SiteCursor />
       <JumpCurtain phase={curtain.phase} label={curtain.label} />
-      <AppHeader />
+      <AppHeader>{headerSlot}</AppHeader>
 
       {/* ——— Обложка ——— */}
       <section className="mx-auto w-full max-w-[1280px] px-5 pt-10 sm:px-8 lg:pt-14">
@@ -227,6 +235,7 @@ export function CreatePage({ onGenerate, onOpenCurrent, serverMode = false }: {
 
       {/* ——— Рабочая область ——— */}
       <main ref={workspaceRef} className="mx-auto w-full max-w-[1280px] scroll-mt-20 px-5 pt-16 pb-24 sm:px-8 lg:pt-24">
+        {notice && <div className="mb-12 flex flex-col gap-4">{notice}</div>}
         {savedPresentation && (
           <div className="mb-12">
             <DraftBanner

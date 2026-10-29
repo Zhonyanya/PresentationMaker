@@ -9,21 +9,16 @@ import { useFlowStore } from '@/store/flow-store'
 import { safeStorage } from '@/lib/storage'
 import { usePresentationScenes } from '@/hooks/usePresentationScenes'
 import { CreatePage } from '@/features/create/CreatePage'
-import { EditorHeader } from '@/features/editor/EditorHeader'
-import { SlideCanvas } from '@/features/editor/SlideCanvas'
-import { ExportDialog } from '@/features/editor/ExportDialog'
-import { SlideRenderer, SLIDE_PX } from '@/features/slides/SlideRenderer'
+import { ReadyCurtain } from '@/features/generation/ReadyCurtain'
 import { AuthScreen, SessionCheck, type AuthKind } from './AuthScreen'
+import { AccountControls, JobWaiting, Notice, PausedJob, ServerEditor, type JobKind } from './ServerWorkspace'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
+import { toast } from 'sonner'
 
 const api = createServerApi({ baseUrl: env.apiBaseUrl })
 const referenceKey = (user: ServerUser) => `pm:current:${user.id}`
-const PHASES: Record<JobStatus['phase'], string> = { waiting: 'В очереди', ml: 'Выполняется ML', validation: 'Проверяем результат', saving: 'Сохраняем', done: 'Завершено' }
 
 /** Poll failures worth retrying: the job keeps running on the server meanwhile. */
 const TRANSIENT = new Set(['network', 'timeout', 'server', 'rate_limited'])
@@ -60,6 +55,13 @@ function Workspace() {
   const [instruction, setInstruction] = useState('')
   const [targets, setTargets] = useState('')
   const [exportOpen, setExportOpen] = useState(false)
+  const [jobKind, setJobKind] = useState<JobKind>(null)
+  const [jobStartedAt, setJobStartedAt] = useState<number | null>(null)
+  const [ready, setReady] = useState<number | null>(null)
+  const jobKindRef = useRef<JobKind>(null)
+  const editorRef = useRef(false)
+  jobKindRef.current = jobKind
+  editorRef.current = editor
   const epoch = useRef(0)
   const userRef = useRef<ServerUser | null>(null)
   const submission = useRef<{ signature: string; key: string } | null>(null)
@@ -103,6 +105,7 @@ function Workspace() {
       // Server active_job is authoritative; completed jobs need no resumed polling.
       setJob(value.active_job)
       setWaiting(Boolean(value.active_job))
+      setJobKind(null); setJobStartedAt(value.active_job ? Date.now() : null)
       setEditor(Boolean(value.document))
       saveReference(account, value.presentation_id, value.active_job)
     } catch (cause) {
@@ -185,7 +188,12 @@ function Workspace() {
         applyCurrent(value)
         setJob(value.active_job); setWaiting(Boolean(value.active_job))
         saveReference(user, value.presentation_id, value.active_job)
+        const kind = jobKindRef.current
+        setJobKind(null)
         if (status.status === 'succeeded') {
+          // Moment of "Готово" between waiting and the editor, as in the demo flow
+          if (value.document && kind !== 'revise' && !editorRef.current) setReady(value.document.slides.length)
+          if (kind === 'revise') toast.success('Правка применена')
           setEditor(Boolean(value.document))
           setInstruction('')
           setError(status.output_document_token !== value.document_token ? 'Документ уже обновлён другой задачей. Показан текущий результат, не архив.' : '')
@@ -252,6 +260,7 @@ function Workspace() {
       if (activeEpoch !== epoch.current) return
       submission.current = null
       setJob(accepted); setWaiting(true); setPhase('waiting')
+      setJobKind(operation); setJobStartedAt(Date.now())
       saveReference(user, accepted.presentation_id, accepted)
       // Polling loads the document after completion. An eager GET here could
       // arrive late with document: null and overwrite the successful result.
@@ -280,43 +289,62 @@ function Workspace() {
   const document = current?.document
   // Store and server state update separately; for one render the selection may point to another document
   const selectedIndex = Math.max(0, document?.slides.findIndex((s) => s.id === selected?.id) ?? 0)
+  const startNew = () => {
+    setCurrent(null); setEditor(false); setInstruction(''); setTargets(''); setError(''); submission.current = null
+    useEditorStore.getState().close(); useFlowStore.getState().clearDraft(); safeStorage.removeItem(referenceKey(user))
+  }
+  const leaveWaiting = () => { setWaiting(false); setEditor(false) }
+  const resumeWaiting = () => setWaiting(true)
+  const account = <AccountControls login={user.login} busy={busy} canStartNew={!busy && !job} onNew={startNew} onLogout={() => void logout()} />
+  const notice = error ? (
+    <Notice
+      message={error}
+      onDismiss={() => setError('')}
+      action={current && <Button variant="link" size="sm" className="h-auto shrink-0 text-destructive" onClick={() => void refresh()}>Обновить документ</Button>}
+    />
+  ) : null
+
+  let screen
+  if (editor && document && selected) {
+    screen = (
+      <ServerEditor
+        document={document}
+        scenes={scenes}
+        selected={document.slides[selectedIndex] ?? selected}
+        selectedIndex={selectedIndex}
+        account={account}
+        notice={notice}
+        job={job ? { phase, waiting, onLeave: leaveWaiting, onResume: resumeWaiting } : null}
+        exportOpen={exportOpen}
+        onExportOpenChange={setExportOpen}
+        onSelect={(id) => useEditorStore.getState().select(id)}
+        onBack={() => setEditor(false)}
+        busy={busy}
+        instruction={instruction}
+        targets={targets}
+        onInstruction={setInstruction}
+        onTargets={setTargets}
+        onRevise={() => void launch('revise')}
+        onRegenerate={leaveWaiting}
+      />
+    )
+  } else if (job && waiting) {
+    screen = <JobWaiting phase={phase} kind={jobKind} startedAt={jobStartedAt} header={account} notice={notice} onLeave={leaveWaiting} />
+  } else {
+    screen = (
+      <CreatePage
+        serverMode
+        headerSlot={account}
+        startAtWorkspace={Boolean(job || current)}
+        notice={(notice || job) && <>{notice}{job && <PausedJob phase={phase} onResume={resumeWaiting} />}</>}
+        onGenerate={(body) => void launch('generate', body)}
+        onOpenCurrent={() => setEditor(true)}
+      />
+    )
+  }
+
   return <>
-    <div className="flex flex-wrap items-center justify-end gap-3 border-b bg-background px-5 py-2 text-sm">
-      <span>{user.login}</span>
-      <Button variant="ghost" size="sm" disabled={busy || Boolean(job)} onClick={() => {
-        setCurrent(null); setEditor(false); setInstruction(''); setTargets(''); submission.current = null
-        useEditorStore.getState().close(); useFlowStore.getState().clearDraft(); safeStorage.removeItem(referenceKey(user))
-      }}>Новая презентация</Button>
-      <Button variant="ghost" size="sm" onClick={() => void logout()} disabled={busy}>Выйти</Button>
-    </div>
-    {(error || job) && <section className="border-b bg-card px-5 py-4" aria-live="polite">
-      {error && <p role="alert" className="mb-2 text-destructive">{error}</p>}
-      {job && <div className="flex flex-wrap items-center gap-3"><span>{waiting ? PHASES[phase] : 'Ожидание приостановлено'}. Задание продолжит выполняться на сервере.</span>
-        {waiting ? <Button variant="outline" onClick={() => { setWaiting(false); setEditor(false) }}>Вернуться к форме</Button>
-          : <Button onClick={() => setWaiting(true)}>Возобновить ожидание</Button>}</div>}
-      {current && <Button variant="link" onClick={() => void refresh()}>Обновить текущий документ</Button>}
-    </section>}
-    {editor && document && selected ? <div className="flex min-h-dvh flex-col bg-background">
-      <EditorHeader title={document.title} onBack={() => setEditor(false)} onExport={() => setExportOpen(true)} />
-      <div className="grid min-h-[70vh] grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_320px]">
-        <nav className="scroll-thin flex gap-4 overflow-auto border-r p-4 lg:max-h-[85vh] lg:flex-col" aria-label="Слайды">
-          {document.slides.map((slide, index) => <button key={slide.id} onClick={() => useEditorStore.getState().select(slide.id)} aria-pressed={selected.id === slide.id} aria-label={`Слайд ${index + 1}: ${slide.title}`} className={`shrink-0 p-1 text-left ${selected.id === slide.id ? 'ring-2 ring-foreground' : ''}`}>
-            <span className="text-xs">{index + 1}. {slide.title}</span><div className="pointer-events-none"><SlideRenderer scene={scenes[index]} scale={176 / SLIDE_PX.width} /></div>
-          </button>)}
-        </nav>
-        <SlideCanvas slide={document.slides[selectedIndex] ?? selected} scene={scenes[selectedIndex]} index={selectedIndex} total={document.slides.length} activeField={null} readOnly />
-        <aside className="space-y-5 border-l p-5">
-          <h2 className="font-display text-2xl">Правка командой</h2>
-          <p className="text-sm text-muted-foreground">Изменения выполняет ML. Пока задача не завершится успешно, прежний результат доступен для просмотра и экспорта.</p>
-          <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void launch('revise') }}>
-            <Label htmlFor="command">Что изменить</Label><Textarea id="command" required maxLength={10000} value={instruction} onChange={(e) => setInstruction(e.target.value)} disabled={busy || Boolean(job)} />
-            <Label htmlFor="targets">Номера слайдов через запятую (необязательно)</Label><Input id="targets" value={targets} onChange={(e) => setTargets(e.target.value)} disabled={busy || Boolean(job)} placeholder="Например: 2, 4" />
-            <Button disabled={busy || Boolean(job) || !instruction.trim()}>Применить команду</Button>
-          </form>
-          <Button variant="outline" onClick={() => { setWaiting(false); setEditor(false) }}>Полная перегенерация</Button>
-        </aside>
-      </div>
-      <ExportDialog open={exportOpen} onOpenChange={setExportOpen} presentation={document} scenes={scenes} />
-    </div> : <CreatePage serverMode onGenerate={(body) => void launch('generate', body)} onOpenCurrent={() => setEditor(true)} />}
+    {screen}
+    {ready !== null && <ReadyCurtain slideCount={ready} onDone={() => setReady(null)} />}
   </>
 }

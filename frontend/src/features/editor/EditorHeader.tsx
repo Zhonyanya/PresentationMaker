@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { ArrowLeft, Check, Download } from 'lucide-react'
 import { BrandMark } from '@/components/app/BrandMark'
 import { ModeBadges } from '@/components/app/ModeBadges'
@@ -10,9 +11,11 @@ interface EditorHeaderProps {
   onTitleChange?: (title: string) => void
   onBack: () => void
   onExport: () => void
+  /** Дополнительные элементы справа — например, аккаунт в серверном режиме */
+  extra?: ReactNode
 }
 
-export function EditorHeader({ title, onTitleChange, onBack, onExport }: EditorHeaderProps) {
+export function EditorHeader({ title, onTitleChange, onBack, onExport, extra }: EditorHeaderProps) {
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-2 sm:gap-3 sm:px-4" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
       <SimpleTooltip label="К исходному тексту — презентация сохранится">
@@ -46,6 +49,7 @@ export function EditorHeader({ title, onTitleChange, onBack, onExport }: EditorH
         <div className="max-md:hidden">
           <ModeBadges />
         </div>
+        {extra}
         <Button onClick={onExport} className="max-sm:px-3">
           <Download />
           <span className="max-sm:sr-only">Скачать PPTX</span>
