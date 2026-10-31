@@ -137,7 +137,7 @@ export function SourceTextField({ id, value, onChange, error, onSubmitShortcut, 
                   Вставить из буфера
                 </Button>
                 <Button type="button" variant="link" size="sm" onClick={() => fileInputRef.current?.click()}>
-                  Загрузить .txt или .docx
+                  Загрузить .txt, .md или .docx
                 </Button>
                 <Button type="button" variant="link" size="sm" onClick={onShowExamples}>
                   Открыть пример
@@ -162,7 +162,7 @@ export function SourceTextField({ id, value, onChange, error, onSubmitShortcut, 
             </p>
           ) : (
             <p id={hintId} className="text-muted-foreground">
-              Можно перетащить файл в поле. Поддерживаются .txt и .docx.
+              Можно перетащить файл в поле. Поддерживаются .txt, .md и .docx.
             </p>
           )}
         </div>

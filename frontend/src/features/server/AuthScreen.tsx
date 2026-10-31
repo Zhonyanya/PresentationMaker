@@ -110,7 +110,7 @@ function Cover() {
           </motion.span>
         </span>
         <div className="mt-8 flex flex-wrap gap-x-6 gap-y-2 border-t border-background/15 pt-5 text-[13px] text-background/60">
-          <span>Слайды в корпоративном стиле</span>
+          <span>Единое оформление слайдов</span>
           <span>Правка командами</span>
           <span>Редактируемый PPTX</span>
         </div>
@@ -163,7 +163,9 @@ export function AuthScreen({ kind, login, password, error, busy, onKindChange, o
   const ids = { login: useId(), loginHint: useId(), password: useId(), passwordHint: useId() }
   const copy = COPY[kind]
   const registering = kind === 'register'
-  const enough = password.length >= PASSWORD_MIN
+  // Сервер считает символы, а не единицы UTF-16: эмодзи — один символ, а не два
+  const length = Array.from(password).length
+  const enough = length >= PASSWORD_MIN
 
   return (
     <div className="grid min-h-dvh bg-background lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
@@ -225,7 +227,7 @@ export function AuthScreen({ kind, login, password, error, busy, onKindChange, o
               <div className="flex items-baseline justify-between">
                 <Label htmlFor={ids.password}>Пароль</Label>
                 <span id={ids.passwordHint} className={cn('text-[12.5px] tabular-nums transition-colors', registering && enough ? 'text-success' : 'text-muted-foreground')}>
-                  {registering ? `${Math.min(password.length, PASSWORD_MIN)} / ${PASSWORD_MIN} символов` : `${PASSWORD_MIN}–${PASSWORD_MAX} символов`}
+                  {registering ? `${Math.min(length, PASSWORD_MIN)} / ${PASSWORD_MIN} символов` : `${PASSWORD_MIN}–${PASSWORD_MAX} символов`}
                 </span>
               </div>
               <div className="relative">
@@ -239,7 +241,11 @@ export function AuthScreen({ kind, login, password, error, busy, onKindChange, o
                   aria-describedby={ids.passwordHint}
                   className="h-11 pr-11 text-[15px]"
                   value={password}
-                  onChange={(e) => onPasswordChange(e.target.value)}
+                  onChange={(e) => {
+                    const short = registering && Array.from(e.target.value).length < PASSWORD_MIN
+                    e.target.setCustomValidity(short ? `Пароль — не меньше ${PASSWORD_MIN} символов` : '')
+                    onPasswordChange(e.target.value)
+                  }}
                 />
                 <button
                   type="button"
@@ -257,7 +263,7 @@ export function AuthScreen({ kind, login, password, error, busy, onKindChange, o
                   <motion.div
                     className={cn('h-full origin-left', enough ? 'bg-success' : 'bg-foreground')}
                     initial={false}
-                    animate={{ scaleX: Math.min(password.length / PASSWORD_MIN, 1) }}
+                    animate={{ scaleX: Math.min(length / PASSWORD_MIN, 1) }}
                     transition={{ duration: 0.4, ease: EASE_OUT_EXPO }}
                   />
                 </div>
@@ -306,7 +312,7 @@ export function AuthScreen({ kind, login, password, error, busy, onKindChange, o
 
         <p className="mx-auto flex w-full max-w-[400px] items-start gap-2.5 text-[12.5px] leading-relaxed text-muted-foreground">
           <LockKeyhole className="mt-[3px] size-3.5 shrink-0" aria-hidden />
-          Сессия хранится в защищённой cookie на сервере. Пароль не сохраняется в браузере.
+          Сессия хранится на сервере, браузер получает только HttpOnly-cookie. Пароль в браузере не сохраняется.
         </p>
       </main>
     </div>

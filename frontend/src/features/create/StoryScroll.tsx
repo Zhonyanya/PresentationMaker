@@ -3,6 +3,7 @@ import { motion, useInView, useReducedMotion, useScroll, useTransform, type Moti
 import { SLIDE_PX, SlideRenderer } from '@/features/slides/SlideRenderer'
 import { useElementSize } from '@/hooks/useElementSize'
 import { demoExamples } from '@/data/demo-examples'
+import { plural } from '@/lib/utils'
 import type { SlideScene } from '@/layouts/scene'
 import { getShowcase } from './showcase'
 
@@ -233,7 +234,7 @@ export function StoryScroll() {
                   <span className="flex h-10 w-8 items-end justify-center bg-foreground pb-1 font-sans text-[8px] font-bold tracking-wider text-background">PPTX</span>
                   <span className="flex flex-col">
                     <span className="font-display text-[17px] leading-tight">{title}.pptx</span>
-                    <span className="eyebrow mt-1 !text-[10px]">{slideCount} слайдов · 16:9 · редактируемый</span>
+                    <span className="eyebrow mt-1 !text-[10px]">{slideCount} {plural(slideCount, ['слайд', 'слайда', 'слайдов'])} · 16:9 · редактируемый</span>
                   </span>
                 </motion.div>
               </>

@@ -23,7 +23,7 @@ export type JobKind = 'generate' | 'revise' | null
 
 const PHASES: { id: Phase; label: string }[] = [
   { id: 'waiting', label: 'В очереди' },
-  { id: 'ml', label: 'Модель готовит слайды' },
+  { id: 'ml', label: 'ML-модуль готовит слайды' },
   { id: 'validation', label: 'Проверяем результат' },
   { id: 'saving', label: 'Сохраняем документ' },
   { id: 'done', label: 'Готово' },
@@ -332,7 +332,7 @@ function RevisionPanel({ index, locked, busy, instruction, targets, status, onIn
       <div className="flex flex-col gap-7 p-5">
         {status}
         <p className="text-[13.5px] leading-relaxed text-muted-foreground">
-          Опишите словами, что поменять, — модель перепишет слайды. Число, порядок и ID слайдов сохранятся.
+          Опишите словами, что поменять, — ML-модуль перепишет слайды. Число, порядок и ID слайдов сохранятся.
         </p>
         <form className="flex flex-col gap-5" onSubmit={submit}>
           <div className="flex flex-col gap-2">
@@ -383,7 +383,7 @@ function RevisionPanel({ index, locked, busy, instruction, targets, status, onIn
         <div className="flex flex-col gap-3 border-t border-border pt-6">
           <h3 className="eyebrow">Начать заново</h3>
           <p className="text-[13px] leading-relaxed text-muted-foreground">
-            Полная перегенерация создаст новый вариант из исходного текста. Текущий документ останется, пока новый не будет готов.
+            Полная перегенерация вернёт к форме: проверьте исходный текст и создайте новый вариант. Текущий документ останется, пока новый не будет готов.
           </p>
           <Button variant="outline" onClick={onRegenerate} className="self-start">
             <RotateCcw aria-hidden />

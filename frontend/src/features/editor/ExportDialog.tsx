@@ -87,7 +87,7 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
                 transition={{ duration: 0.5, delay: 0.45, ease: EASE_OUT_EXPO }}
               />
             </svg>
-            <DialogTitle className="mt-6 italic">Файл сохранён</DialogTitle>
+            <DialogTitle className="mt-6 italic">Файл готов</DialogTitle>
             <DialogDescription className="mt-2 max-w-[36ch] break-all">{savedName}</DialogDescription>
           </motion.div>
         ) : (

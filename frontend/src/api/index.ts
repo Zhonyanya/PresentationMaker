@@ -1,16 +1,19 @@
 import { env } from '@/config/env'
-import { createHttpApi } from './http-api'
+import { ApiError } from './errors'
 import { createMockApi } from './mock/mock-api'
 import type { PresentationApi } from './types'
 
 /**
- * Выбор реализации API по переменной окружения VITE_API_MODE.
- * Компоненты импортируют только `presentationApi` и типы — переписывать их
- * при подключении бэкенда не нужно.
+ * Генератор демо-режима (VITE_API_MODE=mock). Серверный сценарий работает через
+ * server-api.ts (задания и polling /api/v1) и этот интерфейс не использует.
  */
 function createApi(): PresentationApi {
   if (env.apiMode === 'http') {
-    return createHttpApi({ baseUrl: env.apiBaseUrl, timeoutMs: env.apiTimeoutMs })
+    return {
+      mode: 'http',
+      reportsStages: false,
+      generate: () => Promise.reject(new ApiError('unknown', { message: 'Демо-генерация недоступна в серверном режиме.' })),
+    }
   }
   const failEvery = Number(new URLSearchParams(globalThis.location?.search ?? '').get('mockFailEvery')) || undefined
   return createMockApi({ failEvery })

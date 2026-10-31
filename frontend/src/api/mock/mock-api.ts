@@ -1,5 +1,5 @@
 import { generateRequestSchema, generateResponseSchema, type GenerateRequest, type Presentation } from '@/domain/presentation'
-import { normalizeGenerated } from '@/domain/operations'
+import { fitGenerated, normalizeGenerated } from '@/domain/operations'
 import { ApiError } from '../errors'
 import { GENERATION_STAGES, type GenerateOptions, type PresentationApi } from '../types'
 import { generateMockPresentation } from './mock-generator'
@@ -48,7 +48,8 @@ export function createMockApi(config: MockApiConfig = {}): PresentationApi {
       for (const [index, stage] of GENERATION_STAGES.entries()) {
         options.onStage?.(stage.id)
         await wait(stageDelay * (index === 2 ? 1.6 : 1), options.signal)
-        if (stage.id === 'structure') response = generateMockPresentation(parsedRequest.data)
+        // Заголовки берутся из текста как есть: длинное название школы не должно ломать генерацию
+        if (stage.id === 'structure') response = fitGenerated(generateMockPresentation(parsedRequest.data))
         if (config.failEvery && calls % config.failEvery === 0 && stage.id === 'slides') {
           throw new ApiError('server', { details: 'Сымитированная ошибка демо-режима' })
         }

@@ -104,6 +104,8 @@ export async function buildPptx(presentation: Presentation, options: ExportOptio
 /** Безопасное имя файла из названия презентации */
 export function toFileName(title: string): string {
   const base = title
+    // Невидимые символы форматирования (RLO, zero-width) позволяют подделать вид имени и расширения
+    .replace(/\p{Cf}/gu, '')
     .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

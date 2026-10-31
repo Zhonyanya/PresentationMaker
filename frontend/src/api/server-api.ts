@@ -112,16 +112,16 @@ export function createServerApi(config: { baseUrl: string; fetch?: typeof fetch;
       return result.user
     },
     async logout() { await post('/auth/logout', {}, z.null()); csrfToken = null },
-    current(id: string, signal?: AbortSignal) { return request(`/presentations/${id}`, currentSchema, { signal }) },
-    status(id: string, signal?: AbortSignal) { return request(`/jobs/${id}`, statusSchema, { signal }) },
+    current(id: string, signal?: AbortSignal) { return request(`/presentations/${encodeURIComponent(id)}`, currentSchema, { signal }) },
+    status(id: string, signal?: AbortSignal) { return request(`/jobs/${encodeURIComponent(id)}`, statusSchema, { signal }) },
     async generate(body: GenerateRequest, key: string, signal?: AbortSignal, current?: CurrentPresentation) {
       const parsed = generateRequestSchema.safeParse(body)
       if (!parsed.success) throw new ApiError('validation', { message: parsed.error.issues[0]?.message })
-      return post(current ? `/presentations/${current.presentation_id}/generations` : '/presentations',
+      return post(current ? `/presentations/${encodeURIComponent(current.presentation_id)}/generations` : '/presentations',
         { ...parsed.data, ...(current ? { base_document_token: current.document_token } : {}) }, acceptedSchema, key, signal)
     },
     revise(current: CurrentPresentation, instruction: string, targets: number[] | undefined, key: string, signal?: AbortSignal) {
-      return post(`/presentations/${current.presentation_id}/revisions`, { instruction, target_slide_numbers: targets,
+      return post(`/presentations/${encodeURIComponent(current.presentation_id)}/revisions`, { instruction, target_slide_numbers: targets,
         base_document_token: current.document_token }, acceptedSchema, key, signal)
     },
   }

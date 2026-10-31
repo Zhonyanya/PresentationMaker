@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
+import { z } from 'zod'
 import { ApiError, presentationApi, type GenerationStageId } from '@/api'
 import { toApiError } from '@/api/errors'
 import { LIMITS, type GenerateRequest } from '@/domain/presentation'
@@ -37,6 +38,12 @@ interface FlowState {
 
 const idleGeneration: GenerationState = { status: 'idle', stage: null, completedStages: [], error: null, startedAt: null }
 const emptyDraft: SourceDraft = { text: '', title: '', slideCount: LIMITS.slideCountDefault }
+
+const persistedDraftSchema = z.object({
+  text: z.string(),
+  title: z.string(),
+  slideCount: z.number().int().min(LIMITS.slideCountMin).max(LIMITS.slideCountMax),
+})
 
 let controller: AbortController | null = null
 
@@ -111,6 +118,12 @@ export const useFlowStore = create<FlowState>()(
       // Исходный текст и открытый редактор переживают обновление страницы.
       // Незавершённая генерация — нет: после перезагрузки возвращаемся к тексту.
       partialize: ({ draft, view }) => ({ draft, view: view === 'editor' ? view : 'create' }),
+      // Испорченный или подменённый черновик не должен ломать страницу при каждой загрузке
+      merge: (persisted, current) => {
+        const state = persisted as { draft?: unknown; view?: unknown } | undefined
+        const draft = persistedDraftSchema.safeParse(state?.draft)
+        return { ...current, draft: draft.success ? draft.data : current.draft, view: state?.view === 'editor' ? 'editor' : 'create' }
+      },
     },
   ),
 )

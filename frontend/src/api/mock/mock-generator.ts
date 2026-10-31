@@ -8,7 +8,7 @@ import { deriveTitle, parseSource, splitSentences, toBullet, type SourceBlock } 
  * Работает без языковой модели: делит введённый текст на смысловые блоки
  * (заголовки, абзацы, списки) и раскладывает их по макетам. Формулировки
  * берутся из исходного текста; полный текст блока попадает в заметки
- * докладчика. Настоящий генератор — на бэкенде (см. BACKEND_INTEGRATION.md).
+ * докладчика. Настоящая генерация — на сервере, через ML-модуль (см. ML_CONTRACT.md).
  */
 
 type GeneratedSlide = GenerateResponse['slides'][number]

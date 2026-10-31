@@ -4,12 +4,13 @@ import { z } from 'zod'
  * Единый контракт презентации.
  *
  * Эти схемы — источник правды для:
- *  - ответа бэкенда POST /api/generate (см. BACKEND_INTEGRATION.md);
+ *  - документа, который возвращает сервер (GET /api/v1/presentations/{id}, см. README и ML_CONTRACT.md);
  *  - состояния редактора;
  *  - превью и экспорта в PPTX.
  *
- * Чтобы добавить новый макет: добавьте схему слайда сюда и в `slideSchema`,
- * затем опишите макет в src/layouts/registry.ts.
+ * Чтобы добавить новый макет: добавьте схему слайда сюда, в `slideSchema` и
+ * `generatedSlideSchema`, опишите макет в src/layouts/registry.ts и согласуйте
+ * его с backend и ML (README, «Как добавить новый макет»).
  */
 
 export const LIMITS = {
@@ -87,10 +88,12 @@ export const slideSchema = z.discriminatedUnion('layout', [
   closingSlideSchema,
 ])
 
-export const presentationSchema = z.object({
-  title: text(LIMITS.titleMax),
-  slides: z.array(slideSchema).min(1).max(60),
-})
+export const presentationSchema = z
+  .object({
+    title: text(LIMITS.titleMax),
+    slides: z.array(slideSchema).min(1).max(60),
+  })
+  .refine((p) => new Set(p.slides.map((s) => s.id)).size === p.slides.length, { message: 'ID слайдов должны быть уникальными', path: ['slides'] })
 
 export type TitleSlide = z.infer<typeof titleSlideSchema>
 export type TextSlide = z.infer<typeof textSlideSchema>

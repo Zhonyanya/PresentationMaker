@@ -2,9 +2,8 @@ import type { GenerateRequest, Presentation } from '@/domain/presentation'
 import type { ApiMode } from '@/config/env'
 
 /**
- * Этапы генерации. В демо-режиме они имитируются по таймеру.
- * Настоящий бэкенд может сообщать этапы, если перейдёт на потоковую
- * передачу (см. BACKEND_INTEGRATION.md, «Прогресс генерации»).
+ * Этапы генерации демо-режима — имитируются по таймеру. Сервер сообщает
+ * свои фазы задания отдельно (waiting → ml → validation → saving, см. README).
  */
 export const GENERATION_STAGES = [
   { id: 'analyze', label: 'Анализируем материал' },
@@ -18,7 +17,7 @@ export type GenerationStageId = (typeof GENERATION_STAGES)[number]['id']
 
 export interface GenerateOptions {
   signal?: AbortSignal
-  /** Вызывается, если реализация API умеет сообщать этап. HTTP-клиент по умолчанию — не умеет. */
+  /** Вызывается, если реализация API умеет сообщать этап. */
   onStage?: (stage: GenerationStageId) => void
 }
 

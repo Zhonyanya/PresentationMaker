@@ -26,10 +26,11 @@ export function DraftBanner({ title, slideCount, savedAt, onContinue, onDiscard,
       <div className="flex min-w-0 items-center gap-3">
         <History className="size-5 shrink-0 text-brand" aria-hidden />
         <div className="min-w-0">
-          <p className="truncate font-display text-[17px] leading-tight">Незавершённая презентация «{title || 'Без названия'}»</p>
+          <p className="truncate font-display text-[17px] leading-tight">{serverMode ? 'Текущая презентация' : 'Незавершённая презентация'} «{title || 'Без названия'}»</p>
           <p className="mt-1 text-xs text-muted-foreground">
             {slideCount} {plural(slideCount, ['слайд', 'слайда', 'слайдов'])}
-            {savedAt && ` · сохранено ${formatSavedAt(savedAt)}`}
+            {/* На сервере время загрузки страницы — не время сохранения документа */}
+            {savedAt && !serverMode && ` · сохранено ${formatSavedAt(savedAt)}`}
           </p>
         </div>
       </div>

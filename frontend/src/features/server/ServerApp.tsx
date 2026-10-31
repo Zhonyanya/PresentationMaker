@@ -12,6 +12,7 @@ import { CreatePage } from '@/features/create/CreatePage'
 import { ReadyCurtain } from '@/features/generation/ReadyCurtain'
 import { AuthScreen, SessionCheck, type AuthKind } from './AuthScreen'
 import { AccountControls, JobWaiting, Notice, PausedJob, ServerEditor, type JobKind } from './ServerWorkspace'
+import { useMlStub } from '@/components/app/ModeBadges'
 import { Button } from '@/components/ui/button'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
@@ -19,6 +20,7 @@ import { toast } from 'sonner'
 
 const api = createServerApi({ baseUrl: env.apiBaseUrl })
 const referenceKey = (user: ServerUser) => `pm:current:${user.id}`
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** Poll failures worth retrying: the job keeps running on the server meanwhile. */
 const TRANSIENT = new Set(['network', 'timeout', 'server', 'rate_limited'])
@@ -60,6 +62,8 @@ function Workspace() {
   const [ready, setReady] = useState<number | null>(null)
   const jobKindRef = useRef<JobKind>(null)
   const editorRef = useRef(false)
+  const mlStubRef = useRef(false)
+  mlStubRef.current = useMlStub()
   jobKindRef.current = jobKind
   editorRef.current = editor
   const epoch = useRef(0)
@@ -91,7 +95,7 @@ function Workspace() {
     let presentationId: string
     try {
       const reference: unknown = JSON.parse(raw)
-      if (!reference || typeof reference !== 'object' || !('presentationId' in reference) || typeof reference.presentationId !== 'string') throw new Error('bad reference')
+      if (!reference || typeof reference !== 'object' || !('presentationId' in reference) || typeof reference.presentationId !== 'string' || !UUID.test(reference.presentationId)) throw new Error('bad reference')
       presentationId = reference.presentationId
     } catch {
       // Испорченную ссылку не показываем ошибкой при каждом входе — просто забываем
@@ -112,7 +116,7 @@ function Workspace() {
       if (activeEpoch !== epoch.current) return
       const error = toApiError(cause)
       // Презентации больше нет — ссылка устарела, ошибка тут не нужна
-      if (error.code === 'not_found') safeStorage.removeItem(referenceKey(account))
+      if (error.code === 'not_found' || error.code === 'validation') safeStorage.removeItem(referenceKey(account))
       else setError(error.message)
     }
   }, [applyCurrent])
@@ -193,7 +197,11 @@ function Workspace() {
         if (status.status === 'succeeded') {
           // Moment of "Готово" between waiting and the editor, as in the demo flow
           if (value.document && kind !== 'revise' && !editorRef.current) setReady(value.document.slides.length)
-          if (kind === 'revise') toast.success('Правка применена')
+          if (kind === 'revise') {
+            toast.success('Правка применена', mlStubRef.current
+              ? { description: 'Тестовая заглушка ML меняет только заметки докладчика к выбранным слайдам.' }
+              : undefined)
+          }
           setEditor(Boolean(value.document))
           setInstruction('')
           setError(status.output_document_token !== value.document_token ? 'Документ уже обновлён другой задачей. Показан текущий результат, не архив.' : '')

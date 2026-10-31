@@ -56,6 +56,15 @@ export function fitPresentation(presentation: Presentation): Presentation {
   return unchanged ? presentation : { ...presentation, title, slides }
 }
 
+/** То же для ответа генератора: слайды ещё без обязательных ID. */
+export function fitGenerated(response: GenerateResponse): GenerateResponse {
+  return {
+    ...response,
+    title: response.title.slice(0, LIMITS.titleMax),
+    slides: response.slides.slice(0, MAX_SLIDES).map((slide) => fitSlide(slide as Slide) as typeof slide),
+  }
+}
+
 export function extractContent(slide: Slide): SlideContent {
   const definition = getLayout(slide.layout) as LayoutDefinition<typeof slide.layout>
   return (definition.toContent as (s: Slide) => SlideContent)(slide)

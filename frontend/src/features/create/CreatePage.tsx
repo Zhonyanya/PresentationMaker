@@ -34,6 +34,9 @@ const STEPS = [
   { title: 'Скачайте файл', text: 'PPTX открывается в PowerPoint как обычно.' },
 ]
 
+/** В серверном режиме документ правится командами, а не вручную */
+const SERVER_STEPS = STEPS.map((step, i) => (i === 1 ? { ...step, text: 'Уточните формулировки командами в редакторе.' } : step))
+
 interface FieldErrors {
   text?: string
   title?: string
@@ -168,7 +171,7 @@ export function CreatePage({ onGenerate, onOpenCurrent, serverMode = false, head
             style={{ y: headlineY }}
             className="flex min-w-0 flex-col lg:col-span-6"
           >
-            <motion.h1 style={{ opacity: headlineOpacity }} className="font-display text-[clamp(2.6rem,5.2vw,5rem)] leading-[1] font-[380] tracking-[-0.03em]">
+            <motion.h1 style={{ opacity: headlineOpacity }} className="font-display text-[clamp(2.6rem,5.2vw,5rem)] leading-[1] font-[380] tracking-[-0.03em] max-[400px]:text-[2.2rem]">
               <span className="block overflow-hidden pb-[0.06em]">
                 <motion.span variants={lineReveal} className="block whitespace-nowrap">
                   Из доклада&nbsp;—
@@ -337,7 +340,7 @@ export function CreatePage({ onGenerate, onOpenCurrent, serverMode = false, head
                 Порядок работы
               </h2>
               <ol className="flex flex-col">
-                {STEPS.map(({ title, text }, i) => (
+                {(serverMode ? SERVER_STEPS : STEPS).map(({ title, text }, i) => (
                   <motion.li
                     key={title}
                     initial={{ opacity: 0, x: -12 }}
