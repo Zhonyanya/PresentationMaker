@@ -5,6 +5,34 @@ One structured-output request is made per operation. There is no automatic
 regeneration or paid fallback. SDK generation retries are explicitly disabled.
 Importing the package does not import the SDK or initialize a client.
 
+## Provider boundary and prompts
+
+`presentation_ml/prompts.py` holds versioned shared and operation-specific
+instructions (default `PM_ML_PROMPT_VERSION=v1`). The migration preserves the exact earlier
+system messages; their hashes are checked offline. The more detailed v2 templates
+are in `presentation_ml/prompt_templates`. Set `PM_ML_PROMPT_VERSION=v2` in the
+worker environment to opt in. v2 passed one live short-report generation in
+5.41 seconds, retaining the source facts and caveat. A targeted v2 revision then
+passed in 12.03 seconds: only the explicitly requested heading changed, with
+the entire rest of the document compared for exact equality. These are two
+synthetic smoke cases, not a complete quality comparison. v1 remains the default.
+
+`transport.request_document` dispatches through the JsonProvider protocol in
+`presentation_ml/providers`. `PM_ML_PROVIDER=gigachat` selects the only currently
+implemented adapter (and is the default when unset). Its SDK, credentials and
+TLS handling live in `providers/gigachat.py`. Unknown provider names fail with
+NotImplementedError; there is no silent fallback or credential forwarding.
+To support another service, implement `complete_json(system, payload, schema,
+timeout)` and add its explicit selection in get_provider. Validate its schema
+support and a small quality sample before claiming interchangeability.
+Backend/frontend and the generate/revise contract remain provider-independent.
+Hugging Face integration is deferred by user request; no HF client or keys are used.
+
+Changing the key of the same service usually changes only its secret. Changing
+the service also changes the provider/model profile and may require different
+authorization or endpoint settings. Docker environment changes require worker
+recreation. Do not use a GigaChat authorization key as another provider's key.
+
 ## Configuration
 
 Set these in the ML worker environment (not frontend VITE variables):
@@ -94,3 +122,51 @@ normal generation failure (GENERATION_FAILED), rather than declaring the backend
 deadline expired early. The backend owns the actual JOB_TIMED_OUT transition.
 
 Official reference: https://developers.sber.ru/docs/ru/gigachat/guides/structured-output
+
+## Economical quality checks
+
+Five explicitly synthetic cases are in `backend/tests/fixtures/ml_quality_cases.json`:
+three existing fictional frontend reports, one short report with caveats, and one
+Unicode/untrusted-quote case. These are not five real-report acceptance documents.
+
+From backend, with GigaChat variables already in the process environment:
+
+```bash
+# Offline analysis only; no provider calls.
+uv run --locked python -m tools.ml_acceptance --output /private/results
+# Explicitly select the case(s) for live calls; calls are sequential.
+uv run --locked python -m tools.ml_acceptance --live --case short-caveats --output /private/results
+```
+
+The CLI requires explicit case selection for live mode. Saved successful documents
+are reused for later analysis. Failed or interrupted attempts block implicit
+retries: choose a new output directory deliberately if another paid attempt is
+needed. Results contain generated content; keep them private and outside Git.
+Expected text anchors, exact repetition, and long-text indicators only guide
+review. They neither prove factual fidelity nor guarantee PowerPoint fit.
+New live results record provider, model, scope, prompt version and prompt hash. A live
+run cannot reuse a cached result from a different generation profile; use a new
+result directory for an intentional comparison. Old results can still be reviewed
+offline with their original metadata (or explicitly unrecorded legacy metadata).
+
+On 2026-10-31 only two live baseline cases were attempted. The short-report case
+had a ConnectError and was not retried. The Unicode/untrusted-quote case returned
+five valid slides, retained the numbers 24/18/6 and the exam-results caveat, and
+did not execute the embedded instruction. It quoted 999% as explicitly unreliable;
+the automatic forbidden-fragment flag was therefore reviewed as contextual,
+not evidence of instruction execution. Broader quality acceptance remains open.
+
+A later single attempt on year-results failed with ConnectError after 82.98 s;
+it was not retried. Unauthenticated DNS/TCP/TLS probes then succeeded for both
+the OAuth host and api.giga.chat (expected HTTP 405 and 401 respectively).
+This establishes connectivity at probe time, not the cause of the earlier
+intermittent failures. The baseline now records exception cause class names and
+a TLS-verification flag without exception messages, payloads or credentials.
+Do not confuse ConnectError with an HTTP authentication rejection: the SDK uses
+the authorization key to acquire the short-lived access token automatically.
+
+An explicitly requested retry of year-results later succeeded in 15.65 seconds
+with eight slides. Numeric anchors and the age qualifier (>49) were retained.
+Manual review found a semantic repetition of school internet connectivity on
+slides 2 and 6 despite no exact-string repetition flag. This demonstrates the
+limits of the offline indicators. No additional model judge was called.
