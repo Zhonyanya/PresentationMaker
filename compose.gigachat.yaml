@@ -1,0 +1,16 @@
+# Opt-in local real-ML configuration. Never contains credentials.
+# docker compose -f compose.yaml -f compose.gigachat.yaml up --no-build -d --wait
+services:
+  api:
+    environment:
+      PM_ML_ADAPTER: module
+      PM_ML_MODULE: presentation_ml
+  worker:
+    env_file:
+      - ./backend/.env
+    environment:
+      PM_ML_ADAPTER: module
+      PM_ML_MODULE: presentation_ml
+      GIGACHAT_CA_BUNDLE: /app/certs/gigachat-root.crt
+    volumes:
+      - ./backend/certs/gigachat-root.crt:/app/certs/gigachat-root.crt:ro

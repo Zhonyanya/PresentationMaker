@@ -283,6 +283,20 @@ wheels = [
 ]
 
 [[package]]
+name = "gigachat"
+version = "0.2.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2f/c1/368ee776ac970b8d52c0fa9df1085254f4c1a03af9d2b1b6b5f8eb4550d1/gigachat-0.2.4.tar.gz", hash = "sha256:a45c8d542c353dd4a61fceeca1ee0c2ff10219d891335b776a89d3de4f821fad", size = 52062, upload-time = "2026-10-30T12:46:19.207Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/92/ab/85a6715edd5255d581f17fbd008c33e84cbb83cf32ce732a71e905492fe6/gigachat-0.2.4-py3-none-any.whl", hash = "sha256:a9299c1438b4a98c2a9c65b3655159cb39c353212ab26be2e075af9cef7751e1", size = 57284, upload-time = "2026-10-30T12:46:17.72Z" },
+]
+
+[[package]]
 name = "greenlet"
 version = "3.5.6"
 source = { registry = "https://pypi.org/simple" }
@@ -534,6 +548,7 @@ dependencies = [
     { name = "alembic" },
     { name = "celery", extra = ["redis"] },
     { name = "fastapi" },
+    { name = "gigachat" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pwdlib", extra = ["argon2"] },
     { name = "pydantic" },
@@ -556,6 +571,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.14,<2" },
     { name = "celery", extras = ["redis"], specifier = ">=5.4,<6" },
     { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "gigachat", specifier = ">=0.2.4" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2,<4" },
     { name = "pwdlib", extras = ["argon2"], specifier = ">=0.3,<1" },
     { name = "pydantic", specifier = ">=2.10,<3" },
