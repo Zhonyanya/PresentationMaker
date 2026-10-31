@@ -12,6 +12,7 @@ os.environ["PM_CSRF_REQUESTS_PER_MINUTE"] = "1000"
 os.environ["PM_GLOBAL_AUTH_REQUESTS_PER_MINUTE"] = "10000"
 os.environ["PM_ACCOUNT_AUTH_REQUESTS_PER_WINDOW"] = "1000"
 os.environ["PM_REGISTRATIONS_PER_DAY"] = "1000"
+os.environ["PM_WRITE_REQUESTS_PER_MINUTE"] = "1000"
 if os.getenv("PM_TEST_DATABASE_URL"):
     os.environ["PM_DATABASE_URL"] = os.environ["PM_TEST_DATABASE_URL"]
 if os.getenv("PM_TEST_REDIS_URL"):

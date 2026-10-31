@@ -126,7 +126,7 @@ def test_maintenance_scrubs_legacy_terminal_jobs_without_touching_active_data(cl
     assert read(client, first)["document"]
 
 
-def test_account_rate_limit_is_shared_across_ip_addresses_and_login_case(client, monkeypatch):
+def test_account_rate_limit_ignores_login_case_but_not_other_addresses(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "account_auth_requests_per_window", 1)
     login = "unknown_" + uuid4().hex[:12]
     token = client.get("/api/v1/auth/csrf").json()["csrf_token"]
@@ -135,14 +135,21 @@ def test_account_rate_limit_is_shared_across_ip_addresses_and_login_case(client,
         headers=headers(token),
     )
     assert response.status_code == 401
+    rejected = client.post(
+        "/api/v1/auth/login",
+        json={"login": login.upper(), "password": "wrong password long"},
+        headers=headers(token),
+    )
+    assert rejected.status_code == 429
+    # Посторонний, исчерпавший лимит на своём адресе, не блокирует вход с других
     with TestClient(create_app(), client=("198.51.100.99", 12345)) as other:
         token = other.get("/api/v1/auth/csrf").json()["csrf_token"]
-        rejected = other.post(
+        allowed = other.post(
             "/api/v1/auth/login",
-            json={"login": login.upper(), "password": "wrong password long"},
+            json={"login": login, "password": "wrong password long"},
             headers=headers(token),
         )
-    assert rejected.status_code == 429
+    assert allowed.status_code == 401
 
 
 def test_ip_auth_limit_is_still_enforced(database, monkeypatch):

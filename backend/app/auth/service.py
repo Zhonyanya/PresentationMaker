@@ -90,13 +90,19 @@ async def auth_limits(request: Request):
 
 
 async def account_auth_limits(request: Request, body: Credentials) -> Credentials:
-    """Проверяет общий для IP и регистра логина лимит до SQL-поиска сессии."""
+    """Ограничивает подбор пароля к одному логину с одного адреса до SQL-поиска сессии.
+
+    Счётчик привязан к паре «логин + IP»: если считать только по логину, любой
+    посторонний мог бы десятком запросов заблокировать вход владельцу аккаунта.
+    Распределённый подбор сдерживают общие лимиты по IP и сервису.
+    """
     settings = get_settings()
+    address = request.client.host if request.client else "unknown"
     await rate_limit(
         request,
         "auth-account",
         settings.account_auth_requests_per_window,
-        identity=body.login.lower(),
+        identity=f"{body.login.lower()}\n{address}",
         seconds=settings.account_auth_window_seconds,
     )
     return body

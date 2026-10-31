@@ -8,6 +8,9 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+# Сколько дочитывать stdout после выхода процесса, если канал не закрылся
+EXIT_DRAIN_SECONDS = 1.0
+
 
 def exchange(
     process,
@@ -17,6 +20,7 @@ def exchange(
     deadline: datetime,
     heartbeat_seconds: float,
     heartbeat: Callable[[], bool],
+    heartbeat_grace: float = 0,
 ) -> bytes:
     """Передаёт ввод и читает вывод без блокировки на заполненных каналах.
 
@@ -31,6 +35,9 @@ def exchange(
         deadline: Абсолютный срок завершения с часовым поясом UTC.
         heartbeat_seconds: Интервал подтверждения активности в секундах.
         heartbeat: Функция подтверждения; False означает потерю права на выполнение.
+        heartbeat_grace: Сколько секунд после последнего успешного подтверждения
+            терпеть исключения heartbeat (временный сбой БД), прежде чем прервать вызов.
+            False от heartbeat прерывает вызов сразу.
 
     Returns:
         Накопленные байты stdout после его закрытия и завершения процесса.
@@ -43,6 +50,8 @@ def exchange(
     offset = 0
     stdout_open = True
     next_heartbeat = time.monotonic() + heartbeat_seconds
+    last_confirmed = time.monotonic()
+    exited_at = None
     pending_heartbeat = False
     replies = queue.Queue(maxsize=1)
 
@@ -62,6 +71,12 @@ def exchange(
             if remaining <= 0:
                 raise TimeoutError
             now = time.monotonic()
+            # Процесс завершился, но stdout держит открытым его потомок: дочитываем
+            # то, что уже записано, и не ждём EOF до самого deadline.
+            if process.poll() is not None:
+                exited_at = exited_at or now
+                if now - exited_at > EXIT_DRAIN_SECONDS:
+                    break
             if pending_heartbeat:
                 try:
                     active, error = replies.get_nowait()
@@ -70,9 +85,13 @@ def exchange(
                 else:
                     pending_heartbeat = False
                     if error is not None:
-                        raise error
-                    if not active:
+                        # Разовый таймаут БД не должен убивать долгий платный вызов ML
+                        if time.monotonic() - last_confirmed >= heartbeat_grace:
+                            raise error
+                    elif not active:
                         raise TimeoutError
+                    else:
+                        last_confirmed = time.monotonic()
                     next_heartbeat = time.monotonic() + heartbeat_seconds
             if not pending_heartbeat and now >= next_heartbeat:
                 pending_heartbeat = True

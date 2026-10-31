@@ -7,7 +7,7 @@ import secrets
 import signal
 import subprocess
 import sys
-from datetime import timedelta
+from datetime import UTC, timedelta
 from functools import wraps
 from uuid import UUID
 
@@ -45,7 +45,10 @@ celery.conf.update(
     task_routes={"pm.maintenance": {"queue": "pm.maintenance"}},
     task_soft_time_limit=settings.job_deadline_seconds + 10,
     task_time_limit=settings.job_deadline_seconds + 30,
-    beat_schedule={"recover-jobs": {"task": "pm.maintenance", "schedule": 15.0}},
+    # Пропущенные запуски не копятся, пока maintenance-worker недоступен
+    beat_schedule={
+        "recover-jobs": {"task": "pm.maintenance", "schedule": 15.0, "options": {"expires": 30}}
+    },
     timezone="UTC",
 )
 
@@ -96,7 +99,17 @@ def dispatch_job(identifier: UUID):
             ):
                 return
             job.dispatched_at = utcnow()
-        execute_job.apply_async(args=[str(identifier)], retry=False)
+        try:
+            execute_job.apply_async(args=[str(identifier)], retry=False)
+        except Exception:
+            # Сообщение не ушло: снимаем отметку, чтобы Beat повторил сразу, а не через интервал
+            with sync_sessions()() as db, db.begin():
+                db.execute(
+                    update(Job)
+                    .where(Job.id == identifier, Job.status == "queued")
+                    .values(dispatched_at=None)
+                )
+            raise
     except Exception as exc:
         # Текст исключения может содержать URL брокера и секреты; пишем только тип.
         logger.warning(
@@ -200,6 +213,8 @@ def call_ml(identifier, attempt, kind, snapshot, deadline):
         TypeError: При неверном типе данных протокола.
         KeyError: При отсутствии обязательных полей протокольного ответа.
     """
+    # Контракт ML обещает deadline в UTC; psycopg возвращает время в часовом поясе сессии БД
+    deadline = deadline.astimezone(UTC)
     inputs = dict(snapshot, job_id=str(identifier), deadline=deadline.isoformat())
     payload = json.dumps({"kind": kind, "inputs": inputs}, ensure_ascii=False).encode()
     parent_read, parent_write = os.pipe()
@@ -220,6 +235,8 @@ def call_ml(identifier, attempt, kind, snapshot, deadline):
             stderr=subprocess.DEVNULL,
             start_new_session=True,
             pass_fds=(parent_read,),
+            # Протокол — JSON в UTF-8 независимо от локали контейнера
+            env={**os.environ, "PYTHONUTF8": "1"},
         )
     except BaseException:
         os.close(parent_write)
@@ -230,10 +247,13 @@ def call_ml(identifier, attempt, kind, snapshot, deadline):
         stdout = exchange(
             process,
             payload,
-            max_bytes=settings.max_ml_bytes + 1024,
+            # Запас на ID слайдов и поля по умолчанию, которые runner добавляет при нормализации
+            max_bytes=settings.max_ml_bytes + 65536,
             deadline=deadline,
             heartbeat_seconds=settings.heartbeat_seconds,
             heartbeat=lambda: heartbeat(identifier, attempt, deadline),
+            # Сбой heartbeat терпим, пока maintenance не сочтёт worker потерянным
+            heartbeat_grace=max(0, settings.worker_lost_seconds - 2 * settings.heartbeat_seconds),
         )
         if process.returncode != 0:
             if deadline <= utcnow():
@@ -257,7 +277,8 @@ def call_ml(identifier, attempt, kind, snapshot, deadline):
         # Завершаем всю группу, включая дочерние процессы, не отделившиеся от неё.
         try:
             os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
+            # macOS отвечает PermissionError на группу, где остались только зомби
             pass
         # После чрезмерного ответа не дочитываем недоверенный stdout при очистке.
         process.stdin.close()

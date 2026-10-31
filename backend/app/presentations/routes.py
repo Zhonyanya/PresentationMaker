@@ -3,10 +3,11 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy import select
 
-from app.auth.service import DB, CurrentUser, authenticated_csrf_guard
+from app.auth.service import DB, CurrentUser, authenticated_csrf_guard, rate_limit
+from app.core.config import get_settings
 from app.core.errors import AppError
 from app.db.models import Job, Presentation
 from app.jobs.service import ACTIVE, accepted, submit
@@ -14,6 +15,20 @@ from app.presentations.schemas import GenerateRequest, RegenerateRequest, Revise
 
 router = APIRouter(tags=["presentations"])
 Key = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
+
+
+async def write_limits(request: Request, user: CurrentUser):
+    """Ограничивает частоту генераций и правок одного пользователя до транзакции приёма.
+
+    Квоты заданий считаются в PostgreSQL под общей блокировкой; без этого лимита
+    поток запросов с новыми ключами идемпотентности нагружал бы её впустую.
+    """
+    await rate_limit(
+        request, "write", get_settings().write_requests_per_minute, identity=str(user.id)
+    )
+
+
+WRITE = [Depends(authenticated_csrf_guard), Depends(write_limits)]
 
 
 async def enqueue(db, user, key, body, identifier=None):
@@ -42,7 +57,7 @@ async def enqueue(db, user, key, body, identifier=None):
     return accepted(job)
 
 
-@router.post("/presentations", status_code=202, dependencies=[Depends(authenticated_csrf_guard)])
+@router.post("/presentations", status_code=202, dependencies=WRITE)
 async def generate(body: GenerateRequest, user: CurrentUser, db: DB, key: Key):
     """Принимает первую генерацию, возвращая задание, а не готовый документ."""
     return await enqueue(db, user, key, body)
@@ -51,7 +66,7 @@ async def generate(body: GenerateRequest, user: CurrentUser, db: DB, key: Key):
 @router.post(
     "/presentations/{identifier}/generations",
     status_code=202,
-    dependencies=[Depends(authenticated_csrf_guard)],
+    dependencies=WRITE,
 )
 async def regenerate(
     identifier: UUID, body: RegenerateRequest, user: CurrentUser, db: DB, key: Key
@@ -63,7 +78,7 @@ async def regenerate(
 @router.post(
     "/presentations/{identifier}/revisions",
     status_code=202,
-    dependencies=[Depends(authenticated_csrf_guard)],
+    dependencies=WRITE,
 )
 async def revise(identifier: UUID, body: ReviseRequest, user: CurrentUser, db: DB, key: Key):
     """Принимает командную правку серверного снимка, не изменяя текущий документ сразу."""

@@ -52,12 +52,17 @@ class Settings(BaseSettings):
     account_auth_requests_per_window: int = Field(default=30, gt=0)
     account_auth_window_seconds: int = Field(default=900, gt=0)
     global_auth_requests_per_minute: int = Field(default=300, gt=0)
+    # Генерации и правки одного пользователя: квоты заданий не мешают слать запросы впустую
+    write_requests_per_minute: int = Field(default=20, gt=0)
     password_concurrency: int = Field(default=2, gt=0)
     http_body_timeout_seconds: float = Field(default=30, gt=0)
     max_http_body_readers: int = Field(default=100, gt=0)
     heartbeat_seconds: int = Field(default=15, gt=0)
     worker_lost_seconds: int = Field(default=120, gt=0)
-    dispatch_retry_seconds: int = Field(default=30, gt=0)
+    # Повторная доставка queued-задания, если сообщение потерялось в брокере. Сбой публикации
+    # снимает отметку сразу, поэтому интервал не нужен короткий: иначе занятый ML-worker
+    # копил бы в очереди дубли одного задания.
+    dispatch_retry_seconds: int = Field(default=300, gt=0)
 
     @model_validator(mode="after")
     def production_safety(self):
@@ -108,7 +113,15 @@ class Settings(BaseSettings):
         if self.environment == "production":
             database = make_url(self.database_url)
             redis = urlsplit(self.redis_url)
-            weak_passwords = {"postgres", "password", "changeme", "redis"}
+            # Плюс пароли из compose.yaml и CI: демо-стенд нельзя перенести в production как есть
+            weak_passwords = {
+                "postgres",
+                "password",
+                "changeme",
+                "redis",
+                "local-demo-only",
+                "ci-only-password",
+            }
             # Query передаётся psycopg поверх authority URL. Разрешаем только
             # настройки, не меняющие пользователя, пароль, адрес и базу данных;
             # неизвестные параметры (включая service/passfile) запрещены.

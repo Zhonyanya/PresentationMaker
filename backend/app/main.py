@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeout
 from starlette.exceptions import HTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -24,6 +26,7 @@ from app.db.engine import async_sessions
 from app.presentations.routes import router as presentation_router
 
 logger = logging.getLogger(__name__)
+READY_CACHE_SECONDS = 2
 
 
 def error_response(request: Request, status: int, code: str, message: str):
@@ -71,7 +74,17 @@ def create_app():
         factory = async_sessions()
         await factory.kw["bind"].dispose()
 
-    app = FastAPI(title="PresentationMaker API", version="1.0.0", lifespan=lifespan)
+    # Схема API в production не публикуется: она не нужна пользователям и упрощает разведку
+    docs = settings.environment != "production"
+    app = FastAPI(
+        title="PresentationMaker API",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url="/docs" if docs else None,
+        redoc_url="/redoc" if docs else None,
+        openapi_url="/openapi.json" if docs else None,
+    )
+    app.state.ready_checked = (0.0, None)
 
     @app.middleware("http")
     async def metadata(request: Request, call_next):
@@ -116,6 +129,21 @@ def create_app():
             request, 422, "VALIDATION_ERROR", "Проверьте поля и ограничения запроса."
         )
 
+    @app.exception_handler(OperationalError)
+    @app.exception_handler(PoolTimeout)
+    async def database_busy(request, exc):
+        # Таймауты запросов и блокировок, исчерпание пула — временная перегрузка, а не дефект
+        logger.warning(
+            "database_busy request_id=%s error_type=%s",
+            request.state.request_id,
+            type(exc).__name__,
+        )
+        response = error_response(
+            request, 503, "SERVICE_BUSY", "Сервис перегружен. Повторите через несколько секунд."
+        )
+        response.headers["Retry-After"] = "5"
+        return response
+
     @app.exception_handler(HTTPException)
     async def http_error(request, exc):
         return error_response(
@@ -132,7 +160,25 @@ def create_app():
 
     @app.get("/api/v1/health/ready")
     async def ready(request: Request):
-        """Проверяет БД, Redis и интерфейс ML без запуска генерации в API-процессе."""
+        """Проверяет БД, Redis и интерфейс ML без запуска генерации в API-процессе.
+
+        Результат кешируется на READY_CACHE_SECONDS: адрес доступен без входа, и поток
+        запросов к нему иначе превращался бы в поток запросов к БД.
+        """
+        checked_at, result = request.app.state.ready_checked
+        if time.monotonic() - checked_at < READY_CACHE_SECONDS and result is not None:
+            if result is False:
+                raise AppError(503, "NOT_READY", "Обязательные зависимости недоступны.")
+            return result
+        try:
+            result = await check_ready(request)
+        except AppError:
+            request.app.state.ready_checked = (time.monotonic(), False)
+            raise
+        request.app.state.ready_checked = (time.monotonic(), result)
+        return result
+
+    async def check_ready(request: Request):
         try:
             async with async_sessions()() as db:
                 await db.execute(text("SELECT 1 FROM users LIMIT 1"))

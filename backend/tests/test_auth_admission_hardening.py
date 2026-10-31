@@ -141,10 +141,10 @@ def test_redis_outage_rejects_before_database(admission_app, route):
     assert all(event[0] == "redis" for event in state.events)
 
 
-def test_account_limit_is_shared_between_routes_addresses_and_login_case(admission_app):
+def test_account_limit_is_shared_between_routes_and_login_case_but_not_addresses(admission_app):
     state = admission_app
     state.settings.account_auth_requests_per_window = 1
-    assert request(state.client(), "login").status_code == 403
+    assert request(state.client("198.51.100.2"), "login").status_code == 403
     state.db.scalar.reset_mock()
     state.db.commit.reset_mock()
     response = request(
@@ -155,6 +155,8 @@ def test_account_limit_is_shared_between_routes_addresses_and_login_case(admissi
     assert response.status_code == 429
     state.db.scalar.assert_not_awaited()
     state.db.commit.assert_not_awaited()
+    # Попытки с чужого адреса не блокируют вход владельцу аккаунта
+    assert request(state.client("203.0.113.9"), "login").status_code == 403
 
 
 def test_login_handler_does_not_count_admitted_request_again(admission_app, monkeypatch):

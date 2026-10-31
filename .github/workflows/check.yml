@@ -8,6 +8,7 @@ permissions:
 jobs:
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
@@ -26,6 +27,7 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17-alpine
@@ -56,6 +58,8 @@ jobs:
       - run: uv sync --locked
       - run: uv run --locked ruff check app tests alembic
       - run: uv run --locked pytest -q
+      # Аудит Python-зависимостей по lock-файлу, как npm audit у фронтенда
+      - run: uv export --locked --no-dev --no-hashes --format requirements-txt -o /tmp/requirements.txt && uvx pip-audit==2.9.0 --no-deps --disable-pip -r /tmp/requirements.txt
 
   deployment:
     runs-on: ubuntu-latest

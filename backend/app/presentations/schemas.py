@@ -17,10 +17,24 @@ from app.core.errors import AppError
 
 
 def database_text(value: str) -> str:
-    """Отклоняет NUL до обращения к PostgreSQL text/JSONB."""
+    """Отклоняет NUL и одиночные суррогаты до обращения к PostgreSQL text/JSONB.
+
+    JSON допускает экранированный одиночный суррогат («\\ud800»), но в UTF-8 его не
+    закодировать: без этой проверки запрос падал бы с 500 при хешировании и записи.
+    """
     if "\x00" in value:
         raise ValueError("NUL is not supported in stored text")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("Unpaired surrogates are not supported") from exc
     return value
+
+
+# Токен документа: непустая строка, которую можно хешировать и сравнивать
+DocumentToken = Annotated[
+    str, StringConstraints(min_length=1, max_length=128), AfterValidator(database_text)
+]
 
 
 def text(max_length: int, min_length: int = 0, *, trim=False):
@@ -133,7 +147,7 @@ class GenerateRequest(Contract):
 class RegenerateRequest(GenerateRequest):
     """Полная генерация существующей презентации с токеном её текущего документа."""
 
-    base_document_token: str | None = None
+    base_document_token: DocumentToken | None = None
 
 
 class ReviseRequest(Contract):
@@ -144,7 +158,7 @@ class ReviseRequest(Contract):
         StringConstraints(strip_whitespace=True, min_length=1, max_length=10000),
         AfterValidator(database_text),
     ]
-    base_document_token: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+    base_document_token: DocumentToken
     target_slide_numbers: (
         Annotated[list[Annotated[int, Field(ge=1)]], Field(min_length=1)] | None
     ) = None
