@@ -66,6 +66,23 @@ describe('серверный контракт v1', () => {
     expect(mock).toHaveBeenCalledTimes(2)
   })
 
+  it('список, удаление презентации и аккаунта отправляют DELETE с CSRF и экранированным ID', async () => {
+    const item = { presentation_id: id, title: 'Доклад', slide_count: 6, updated_at: '2026-10-31T10:00:00+00:00', active: false }
+    const mock = vi.fn()
+      .mockResolvedValueOnce(json({ presentations: [item] }))
+      .mockResolvedValueOnce(json({ csrf_token: 'csrf' }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    const api = createServerApi({ baseUrl: '', fetch: mock })
+    expect(await api.list()).toEqual([item])
+    await api.remove(id)
+    expect(mock.mock.calls[2][0]).toBe(`/api/v1/presentations/${id}`)
+    expect(mock.mock.calls[2][1]).toMatchObject({ method: 'DELETE', headers: { 'X-CSRF-Token': 'csrf' } })
+    await api.deleteAccount('пароль')
+    expect(mock.mock.calls[3][0]).toBe('/api/v1/auth/me')
+    expect(JSON.parse(mock.mock.calls[3][1].body)).toEqual({ password: 'пароль' })
+  })
+
   it('не принимает невалидный документ и не нормализует ID повторно', async () => {
     const api = createServerApi({ baseUrl: '', fetch: vi.fn(async () => json({ presentation_id: id, document, document_token: 'token', requested_slide_count: 8, slide_count: 6, active_job: null })) })
     expect((await api.current(id)).document?.slides.map((s) => s.id)).toEqual(document.slides.map((s: { id: string }) => s.id))

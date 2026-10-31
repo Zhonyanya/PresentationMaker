@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { ArrowRight, Eye, EyeOff, LoaderCircle, LockKeyhole } from 'lucide-react'
 import { BrandMark, BrandName } from '@/components/app/BrandMark'
@@ -160,6 +160,11 @@ interface AuthScreenProps {
 /** Экран входа и регистрации серверного режима */
 export function AuthScreen({ kind, login, password, error, busy, onKindChange, onLoginChange, onPasswordChange, onSubmit }: AuthScreenProps) {
   const [revealed, setRevealed] = useState(false)
+  const passwordRef = useRef<HTMLInputElement>(null)
+  // После ошибки входа фокус возвращается к паролю — его всё равно вводят заново
+  useEffect(() => {
+    if (error) passwordRef.current?.focus()
+  }, [error])
   const ids = { login: useId(), loginHint: useId(), password: useId(), passwordHint: useId() }
   const copy = COPY[kind]
   const registering = kind === 'register'
@@ -233,6 +238,7 @@ export function AuthScreen({ kind, login, password, error, busy, onKindChange, o
               <div className="relative">
                 <Input
                   id={ids.password}
+                  ref={passwordRef}
                   required
                   type={revealed ? 'text' : 'password'}
                   minLength={PASSWORD_MIN}
@@ -310,9 +316,15 @@ export function AuthScreen({ kind, login, password, error, busy, onKindChange, o
           </p>
         </div>
 
+        {registering && (
+          <p className="mx-auto mb-3 w-full max-w-[400px] text-[12.5px] leading-relaxed text-muted-foreground">
+            Мы храним логин, тексты докладов и созданные презентации, пока вы их не удалите. Удалить презентации и аккаунт целиком
+            можно в разделе «Мои презентации».
+          </p>
+        )}
         <p className="mx-auto flex w-full max-w-[400px] items-start gap-2.5 text-[12.5px] leading-relaxed text-muted-foreground">
           <LockKeyhole className="mt-[3px] size-3.5 shrink-0" aria-hidden />
-          Сессия хранится на сервере, браузер получает только HttpOnly-cookie. Пароль в браузере не сохраняется.
+          Сессия хранится на сервере, браузер получает только HttpOnly-cookie. Пароль хранится на сервере лишь в виде хеша.
         </p>
       </main>
     </div>

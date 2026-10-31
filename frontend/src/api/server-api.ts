@@ -3,6 +3,12 @@ import { generateRequestSchema, presentationSchema, type GenerateRequest } from 
 import { ApiError } from './errors'
 
 const userSchema = z.object({ id: z.string().uuid(), login: z.string() })
+const libraryItemSchema = z.object({
+  presentation_id: z.string().uuid(), title: z.string().nullable(), slide_count: z.number().int().nullable(),
+  updated_at: z.string(), active: z.boolean(),
+})
+const librarySchema = z.object({ presentations: z.array(libraryItemSchema) })
+export type LibraryItem = z.infer<typeof libraryItemSchema>
 const acceptedSchema = z.object({ presentation_id: z.string().uuid(), job_id: z.string().uuid(), status_url: z.string() })
 const currentSchema = z.object({
   presentation_id: z.string().uuid(), document: presentationSchema.nullable(), document_token: z.string().nullable(),
@@ -80,10 +86,11 @@ export function createServerApi(config: { baseUrl: string; fetch?: typeof fetch;
     csrfToken = result.csrf_token
   }
 
-  async function post<T>(path: string, body: unknown, schema: z.ZodType<T>, key?: string, signal?: AbortSignal) {
+  /** Изменяющий запрос с CSRF-токеном; POST и DELETE отличаются только методом */
+  async function mutate<T>(method: 'POST' | 'DELETE', path: string, body: unknown, schema: z.ZodType<T>, key?: string, signal?: AbortSignal) {
     const send = async () => {
       if (!csrfToken) await csrf()
-      return request(path, schema, { method: 'POST', body: JSON.stringify(body), signal,
+      return request(path, schema, { method, body: JSON.stringify(body), signal,
         headers: { 'X-CSRF-Token': csrfToken!, ...(key ? { 'Idempotency-Key': key } : {}) } })
     }
     try {
@@ -99,8 +106,17 @@ export function createServerApi(config: { baseUrl: string; fetch?: typeof fetch;
     }
   }
 
+  const post = <T,>(path: string, body: unknown, schema: z.ZodType<T>, key?: string, signal?: AbortSignal) =>
+    mutate('POST', path, body, schema, key, signal)
+
   return {
     forget() { identity++; csrfToken = null },
+    /** Свои презентации: названия и даты, без текстов и слайдов */
+    async list(signal?: AbortSignal) { return (await request('/presentations', librarySchema, { signal })).presentations },
+    /** Безвозвратно стирает исходный текст и документ презентации */
+    async remove(id: string) { await mutate('DELETE', `/presentations/${encodeURIComponent(id)}`, {}, z.null()) },
+    /** Удаляет аккаунт со всеми данными; нужен текущий пароль */
+    async deleteAccount(password: string) { await mutate('DELETE', '/auth/me', { password }, z.null()); csrfToken = null },
     /** Сессия могла смениться в другой вкладке — CSRF-токен запросить заново перед следующим POST */
     resetCsrf() { csrfToken = null },
     async me() { return (await request('/auth/me', z.object({ user: userSchema }))).user },

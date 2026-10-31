@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { ArrowRight, LoaderCircle, LogOut, Plus, RotateCcw, TriangleAlert, X } from 'lucide-react'
-import type { JobStatus } from '@/api/server-api'
+import type { JobStatus, LibraryItem } from '@/api/server-api'
 import type { Presentation, Slide } from '@/domain/presentation'
 import type { SlideScene } from '@/layouts/scene'
 import { AppHeader } from '@/components/app/AppHeader'
@@ -53,7 +53,7 @@ export function AccountControls({ login, busy, canStartNew, onNew, onLogout }: {
 }) {
   return (
     <div className="flex items-center gap-1">
-      <span className="mr-1 hidden items-center gap-2 text-[13px] text-muted-foreground lg:flex" title={login}>
+      <span className="mr-1 hidden items-center gap-2 text-[13px] text-muted-foreground xl:flex" title={login}>
         <span className="inline-flex size-6 items-center justify-center rounded-full bg-foreground/[0.07] font-display text-[13px] text-foreground italic" aria-hidden>
           {login.charAt(0).toUpperCase()}
         </span>
@@ -62,12 +62,12 @@ export function AccountControls({ login, busy, canStartNew, onNew, onLogout }: {
       {onNew && (
         <Button variant="ghost" size="sm" disabled={!canStartNew} onClick={onNew}>
           <Plus aria-hidden />
-          <span className="max-md:sr-only">Новая презентация</span>
+          <span className="max-xl:sr-only">Новая презентация</span>
         </Button>
       )}
       <Button variant="ghost" size="sm" disabled={busy} onClick={onLogout}>
         <LogOut aria-hidden />
-        <span className="max-md:sr-only">Выйти</span>
+        <span className="max-xl:sr-only">Выйти</span>
       </Button>
     </div>
   )
@@ -110,7 +110,7 @@ export function PausedJob({ phase, onResume }: { phase: Phase; onResume: () => v
         <span className="relative size-2.5 rounded-full bg-brand" />
       </span>
       <div className="min-w-[16rem] flex-1">
-        <p className="text-[15px]">Задание выполняется на сервере · {phaseLabel(phase).toLowerCase()}</p>
+        <p className="text-[15px]">Задание выполняется на сервере: {phaseLabel(phase)}</p>
         <p className="mt-0.5 text-[13px] text-muted-foreground">Ожидание приостановлено — результат никуда не денется. Новое задание можно начать после завершения текущего.</p>
       </div>
       <Button onClick={onResume}>Возобновить ожидание</Button>
@@ -131,10 +131,10 @@ function PhaseList({ phase }: { phase: Phase }) {
         const current = index === active
         return (
           <li key={item.id} aria-current={current ? 'step' : undefined} className="relative flex items-baseline gap-5 border-b border-border py-3.5">
-            <span className={cn('w-6 font-display text-[15px] italic tabular-nums transition-colors duration-700', current ? 'text-brand' : 'text-foreground/35')}>
+            <span className={cn('w-6 font-display text-[15px] italic tabular-nums transition-colors duration-700', current ? 'text-brand' : 'text-foreground/55')}>
               {String(index + 1).padStart(2, '0')}
             </span>
-            <span className={cn('flex-1 text-[15px] transition-colors duration-700', done ? 'text-muted-foreground' : current ? 'text-foreground' : 'text-foreground/35')}>
+            <span className={cn('flex-1 text-[15px] transition-colors duration-700', done ? 'text-muted-foreground' : current ? 'text-foreground' : 'text-foreground/55')}>
               {item.label}
             </span>
             <span className="eyebrow !text-[10px]">{done ? 'Готово' : current ? 'В работе' : ''}</span>
@@ -385,7 +385,7 @@ function RevisionPanel({ index, locked, busy, instruction, targets, status, onIn
           <p className="text-[13px] leading-relaxed text-muted-foreground">
             Полная перегенерация вернёт к форме: проверьте исходный текст и создайте новый вариант. Текущий документ останется, пока новый не будет готов.
           </p>
-          <Button variant="outline" onClick={onRegenerate} className="self-start">
+          <Button variant="outline" onClick={onRegenerate} disabled={locked} className="self-start">
             <RotateCcw aria-hidden />
             Полная перегенерация
           </Button>
@@ -426,5 +426,139 @@ export function ServerEditor({ document, scenes, selected, selectedIndex, accoun
       </div>
       <ExportDialog open={exportOpen} onOpenChange={onExportOpenChange} presentation={document} scenes={scenes} />
     </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Мои презентации и удаление данных                                    */
+/* ------------------------------------------------------------------ */
+
+function formatDate(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+}
+
+function LibraryRow({ item, current, busy, onOpen, onDelete }: { item: LibraryItem; current: boolean; busy: boolean; onOpen: () => void; onDelete: () => void }) {
+  const [confirming, setConfirming] = useState(false)
+  const title = item.title?.trim() || (item.active ? 'Готовится…' : 'Без названия')
+  return (
+    <li className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border py-3.5 last:border-b-0">
+      <div className="min-w-0 flex-1">
+        <p className="truncate font-display text-[17px] leading-tight">
+          {title}
+          {current && <span className="eyebrow ml-3 align-middle !text-[10px] !text-brand">открыта</span>}
+        </p>
+        <p className="mt-1 text-[12.5px] text-muted-foreground">
+          {item.slide_count ? `${item.slide_count} ${plural(item.slide_count, ['слайд', 'слайда', 'слайдов'])} · ` : ''}
+          {item.active ? 'задание выполняется · ' : ''}
+          {formatDate(item.updated_at)}
+        </p>
+      </div>
+      {confirming ? (
+        <div className="flex items-center gap-2" role="group" aria-label={`Удалить «${title}»?`}>
+          <span className="text-[13px] text-destructive">Удалить безвозвратно?</span>
+          <Button size="sm" variant="destructive" disabled={busy} onClick={() => { setConfirming(false); onDelete() }}>
+            Да, удалить
+          </Button>
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
+            Отмена
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1">
+          <Button size="sm" variant="outline" disabled={busy} onClick={onOpen}>
+            Открыть
+          </Button>
+          <Button size="sm" variant="ghost" disabled={busy || item.active} onClick={() => setConfirming(true)} aria-label={`Удалить «${title}»`}>
+            Удалить
+          </Button>
+        </div>
+      )}
+    </li>
+  )
+}
+
+function AccountDeletion({ busy, onDeleteAccount }: { busy: boolean; onDeleteAccount: (password: string) => Promise<string | null> }) {
+  const [open, setOpen] = useState(false)
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="link-draw self-start text-[13px] text-muted-foreground outline-none hover:text-destructive focus-visible:text-destructive">
+        Удалить аккаунт и все данные
+      </button>
+    )
+  }
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    setError((await onDeleteAccount(password)) ?? '')
+    setPassword('')
+  }
+  return (
+    <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-3 border-l-2 border-destructive bg-destructive-soft px-4 py-3">
+      <p className="text-[13.5px] text-destructive">
+        Аккаунт, все презентации и исходные тексты будут удалены без возможности восстановления. Введите пароль для подтверждения.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor="delete-account-password" className="sr-only">
+          Пароль
+        </Label>
+        <Input
+          id="delete-account-password"
+          type="password"
+          autoComplete="current-password"
+          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Пароль"
+          className="h-9 max-w-[260px] bg-card"
+        />
+        <Button type="submit" size="sm" variant="destructive" disabled={busy || !password}>
+          Удалить аккаунт
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={() => { setOpen(false); setPassword(''); setError('') }}>
+          Отмена
+        </Button>
+      </div>
+      {error && <p role="alert" className="text-[13px] text-destructive">{error}</p>}
+    </form>
+  )
+}
+
+/** Список своих презентаций с удалением — пользователь управляет своими данными */
+export function Library({ items, currentId, busy, onOpen, onDelete, onDeleteAccount }: {
+  items: LibraryItem[]
+  currentId: string | null
+  busy: boolean
+  onOpen: (id: string) => void
+  onDelete: (id: string) => void
+  onDeleteAccount: (password: string) => Promise<string | null>
+}) {
+  return (
+    <section aria-labelledby="library-heading" className="flex flex-col gap-4 border border-border bg-card px-5 py-4">
+      <div className="flex items-baseline justify-between gap-4">
+        <h2 id="library-heading" className="eyebrow !text-foreground">
+          Мои презентации
+        </h2>
+        <span className="text-[12.5px] text-muted-foreground">Хранятся на сервере, пока вы их не удалите</span>
+      </div>
+      {items.length ? (
+        <ul className="scroll-thin max-h-[320px] overflow-auto">
+          {items.map((item) => (
+            <LibraryRow
+              key={item.presentation_id}
+              item={item}
+              current={item.presentation_id === currentId}
+              busy={busy}
+              onOpen={() => onOpen(item.presentation_id)}
+              onDelete={() => onDelete(item.presentation_id)}
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="text-[13.5px] text-muted-foreground">Пока пусто — созданные презентации появятся здесь.</p>
+      )}
+      <AccountDeletion busy={busy} onDeleteAccount={onDeleteAccount} />
+    </section>
   )
 }

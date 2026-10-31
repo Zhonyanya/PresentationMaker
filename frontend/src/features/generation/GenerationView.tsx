@@ -31,10 +31,10 @@ function StageList() {
         const active = stage === item.id && !done
         return (
           <li key={item.id} aria-current={active ? 'step' : undefined} className="relative flex items-baseline gap-5 border-b border-border py-3.5">
-            <span className={cn('w-6 font-display text-[15px] italic tabular-nums transition-colors duration-700', active ? 'text-brand' : 'text-foreground/35')}>
+            <span className={cn('w-6 font-display text-[15px] italic tabular-nums transition-colors duration-700', active ? 'text-brand' : 'text-foreground/55')}>
               {String(index + 1).padStart(2, '0')}
             </span>
-            <span className={cn('flex-1 text-[15px] transition-colors duration-700', done ? 'text-muted-foreground' : active ? 'text-foreground' : 'text-foreground/35')}>
+            <span className={cn('flex-1 text-[15px] transition-colors duration-700', done ? 'text-muted-foreground' : active ? 'text-foreground' : 'text-foreground/55')}>
               {item.label}
             </span>
             <span className="eyebrow !text-[10px]">

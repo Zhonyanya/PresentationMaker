@@ -79,7 +79,7 @@ def admission_app(monkeypatch):
 
         def client(address="198.51.100.1"):
             http = stack.enter_context(TestClient(app, client=(address, 12345)))
-            http.cookies.set(settings.cookie_name, "random-session-cookie")
+            http.cookies.set(settings.cookie_name, "random-session-cookie-in-token-format-x")
             return http
 
         yield SimpleNamespace(client=client, settings=settings, db=db, redis=redis, events=events)
@@ -97,8 +97,6 @@ def request(http, route, **kwargs):
         ("csrf", "csrf_requests_per_minute", "csrf"),
         ("login", "auth_requests_per_minute", "auth"),
         ("register", "auth_requests_per_minute", "auth"),
-        ("login", "global_auth_requests_per_minute", "auth-global"),
-        ("register", "global_auth_requests_per_minute", "auth-global"),
         ("login", "account_auth_requests_per_window", "auth-account"),
         ("register", "account_auth_requests_per_window", "auth-account"),
     ],
@@ -157,6 +155,20 @@ def test_account_limit_is_shared_between_routes_and_login_case_but_not_addresses
     state.db.commit.assert_not_awaited()
     # Попытки с чужого адреса не блокируют вход владельцу аккаунта
     assert request(state.client("203.0.113.9"), "login").status_code == 403
+
+
+def test_requests_failing_csrf_do_not_spend_shared_login_budget(admission_app, monkeypatch):
+    # Иначе поток мусорных запросов с любой cookie закрывал бы вход всем пользователям
+    state = admission_app
+    state.settings.global_auth_requests_per_minute = 1
+    state.db.execute = AsyncMock(return_value=SimpleNamespace(one_or_none=lambda: None))
+    monkeypatch.setattr(service.password_hash, "verify_and_update", lambda *args: (False, None))
+    http = state.client()
+    for _ in range(3):
+        assert request(http, "login").status_code == 403
+    valid = {**HEADERS, "X-CSRF-Token": "known-token"}
+    assert http.post("/api/v1/auth/login", json=BODY, headers=valid).status_code == 401
+    assert http.post("/api/v1/auth/login", json=BODY, headers=valid).status_code == 429
 
 
 def test_login_handler_does_not_count_admitted_request_again(admission_app, monkeypatch):

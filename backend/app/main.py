@@ -85,6 +85,7 @@ def create_app():
         openapi_url="/openapi.json" if docs else None,
     )
     app.state.ready_checked = (0.0, None)
+    ready_lock = anyio.Lock()
 
     @app.middleware("http")
     async def metadata(request: Request, call_next):
@@ -170,6 +171,16 @@ def create_app():
             if result is False:
                 raise AppError(503, "NOT_READY", "Обязательные зависимости недоступны.")
             return result
+        # Одна проверка на всех: при истёкшем кеше запросы не открывают по соединению к БД
+        async with ready_lock:
+            checked_at, result = request.app.state.ready_checked
+            if time.monotonic() - checked_at < READY_CACHE_SECONDS and result is not None:
+                if result is False:
+                    raise AppError(503, "NOT_READY", "Обязательные зависимости недоступны.")
+                return result
+            return await refresh_ready(request)
+
+    async def refresh_ready(request: Request):
         try:
             result = await check_ready(request)
         except AppError:
@@ -196,6 +207,7 @@ def create_app():
         settings.max_http_bytes,
         timeout=settings.http_body_timeout_seconds,
         max_readers=settings.max_http_body_readers,
+        max_per_client=settings.max_http_body_readers_per_client,
     )
     if settings.environment == "production":
         hosts = settings.allowed_hosts or [
@@ -206,7 +218,7 @@ def create_app():
         wrapped,
         allow_origins=settings.allowed_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-CSRF-Token", "Idempotency-Key"],
         expose_headers=["X-Request-ID"],
     )
@@ -220,12 +232,16 @@ class BodyLimitMiddleware:
         limit: Максимальный размер тела в байтах независимо от Content-Length.
         timeout: Общий срок чтения тела в секундах, а не таймаут отдельного фрагмента.
         max_readers: Максимальное число принятых HTTP-запросов в этом процессе.
+        max_per_client: Сколько из них может держать один адрес: медленная отправка
+            тела с одного IP не должна занимать все слоты процесса.
     """
 
-    def __init__(self, app, limit, *, timeout=30, max_readers=100):
+    def __init__(self, app, limit, *, timeout=10, max_readers=100, max_per_client=20):
         self.app, self.limit = app, limit
         self.timeout = timeout
         self.readers = anyio.CapacityLimiter(max_readers)
+        self.max_per_client = max_per_client
+        self.per_client: dict[str, int] = {}
 
     async def __call__(self, scope, receive, send):
         """Буферизует допустимое HTTP-тело и передаёт его вложенному приложению.
@@ -235,6 +251,10 @@ class BodyLimitMiddleware:
         """
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
+        # Проверка живости процесса не зависит от занятости слотов
+        if scope.get("path") == "/api/v1/health/live":
+            return await self.app(scope, receive, send)
+        client = (scope.get("client") or ("unknown", 0))[0]
 
         async def reject(status, code, message):
             request_id = secrets.token_hex(12)
@@ -252,10 +272,14 @@ class BodyLimitMiddleware:
             )
             await response(scope, receive, send)
 
+        if self.per_client.get(client, 0) >= self.max_per_client:
+            return await reject(503, "HTTP_ERROR", "Слишком много одновременных запросов.")
         try:
             self.readers.acquire_nowait()
         except anyio.WouldBlock:
             return await reject(503, "HTTP_ERROR", "Сервис занят. Повторите позже.")
+        # Один цикл событий: счётчик меняется без гонок между корутинами
+        self.per_client[client] = self.per_client.get(client, 0) + 1
         body = bytearray()
         too_large = False
         try:
@@ -294,6 +318,11 @@ class BodyLimitMiddleware:
         finally:
             body = message = chunk = None
             self.readers.release()
+            remaining = self.per_client.get(client, 1) - 1
+            if remaining:
+                self.per_client[client] = remaining
+            else:
+                self.per_client.pop(client, None)
 
 
 app = create_app()

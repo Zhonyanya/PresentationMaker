@@ -66,7 +66,13 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent>
+      <DialogContent
+        // Окно открывается кнопкой в шапке без DialogTrigger: возвращаем фокус на неё сами
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          document.querySelector<HTMLElement>('[data-export-trigger]')?.focus()
+        }}
+      >
         {savedName ? (
           <motion.div
             role="status"
@@ -151,7 +157,7 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
                 <TriangleAlert className="size-4" aria-hidden />
                 Слишком много текста на {problems.length} {plural(problems.length, ['слайде', 'слайдах', 'слайдах'])}
               </p>
-              <p className="mt-1 text-muted-foreground">Файл можно скачать: текст останется в границах слайда, но шрифт будет мелким.</p>
+              <p className="mt-1 text-muted-foreground">Файл можно скачать, но шрифт будет мелким, а при очень большом объёме часть текста может не поместиться. Проверьте эти слайды или разделите их.</p>
               <ul className="mt-2 flex flex-wrap gap-1.5">
                 {problems.map(({ slide, index }) => (
                   <li key={slide.id}>

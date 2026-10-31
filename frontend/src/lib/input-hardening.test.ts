@@ -20,6 +20,10 @@ describe('импорт файлов', () => {
     expect(decodeText(new TextEncoder().encode('Знак � в тексте').buffer)).toBe('Знак � в тексте')
   })
 
+  it('текст, начинающийся с «PK», — это текст, а не архив', () => {
+    expect(decodeText(new TextEncoder().encode('PKI: инфраструктура ключей').buffer)).toBe('PKI: инфраструктура ключей')
+  })
+
   it('не выдаёт ZIP или бинарный файл за текст', () => {
     expect(() => decodeText(bytes(0x50, 0x4b, 0x03, 0x04, 0x14))).toThrow(FileImportError)
     expect(() => decodeText(new Uint8Array(200).buffer)).toThrow(FileImportError)

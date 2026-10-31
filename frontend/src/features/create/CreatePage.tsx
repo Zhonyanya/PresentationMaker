@@ -63,9 +63,11 @@ function SectionLabel({ number, title, aside }: { number: string; title: string;
   )
 }
 
-export function CreatePage({ onGenerate, onOpenCurrent, serverMode = false, headerSlot, notice, startAtWorkspace = false }: {
+export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, serverMode = false, headerSlot, notice, startAtWorkspace = false }: {
   onGenerate?: (request: GenerateRequest) => void
   onOpenCurrent?: () => void
+  /** Серверный режим: забыть текущую презентацию, чтобы следующая генерация создала новую */
+  onDiscardCurrent?: () => void
   serverMode?: boolean
   /** Дополнительные элементы шапки — например, аккаунт в серверном режиме */
   headerSlot?: ReactNode
@@ -248,9 +250,13 @@ export function CreatePage({ onGenerate, onOpenCurrent, serverMode = false, head
               onContinue={onOpenCurrent ?? openEditor}
               serverMode={serverMode}
               onDiscard={() => {
+                if (serverMode) {
+                  // Иначе «Создать презентацию» перегенерировала бы скрытый документ
+                  onDiscardCurrent?.()
+                  return
+                }
                 const backup = savedPresentation
                 closeEditor()
-                if (serverMode) return
                 toast('Черновик удалён', {
                   duration: 8000,
                   action: { label: 'Вернуть', onClick: () => useEditorStore.getState().load(backup) },

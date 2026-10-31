@@ -80,6 +80,9 @@ class Presentation(Base):
     slide_count: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Удалена пользователем: исходный текст и документ стёрты, строка остаётся
+    # только для учёта квот заданий и скрыта из API
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Job(Base):

@@ -1,5 +1,12 @@
 # Локальный интеграционный стенд с fixture, НЕ production и НЕ настоящий ИИ.
 # Не публикуйте этот development-стенд в интернет.
+# Логи контейнеров ротируются: без этого docker хранит их бессрочно
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '3'
+
 x-backend: &backend
   image: presentation-maker-backend:local
   build:
@@ -23,6 +30,7 @@ x-dependencies: &dependencies
 
 services:
   db:
+    logging: *logging
     image: docker.io/library/postgres:17-alpine
     environment:
       POSTGRES_USER: presentation
@@ -38,6 +46,7 @@ services:
     restart: unless-stopped
 
   redis:
+    logging: *logging
     image: docker.io/library/redis:7-alpine
     command: [redis-server, --appendonly, 'yes', --maxmemory-policy, noeviction]
     volumes:
@@ -50,6 +59,7 @@ services:
     restart: unless-stopped
 
   migrate:
+    logging: *logging
     <<: *backend
     command: [alembic, upgrade, head]
     restart: 'no'
@@ -58,6 +68,7 @@ services:
         condition: service_healthy
 
   api:
+    logging: *logging
     <<: *backend
     # Only web exposes a host port; all peers on this private network are trusted.
     # Do not use wildcard proxy trust when exposing the API directly.
@@ -71,6 +82,7 @@ services:
       start_period: 10s
 
   worker:
+    logging: *logging
     <<: *backend
     command: [celery, -A, 'app.worker:celery', worker, '--queues=celery', '--hostname=ml@%h', '--concurrency=1', '--loglevel=INFO']
     depends_on: *dependencies
@@ -83,6 +95,7 @@ services:
       start_period: 20s
 
   maintenance:
+    logging: *logging
     <<: *backend
     command: [celery, -A, 'app.worker:celery', worker, '--queues=pm.maintenance', '--hostname=maintenance@%h', '--concurrency=1', '--loglevel=INFO']
     depends_on: *dependencies
@@ -95,11 +108,13 @@ services:
       start_period: 20s
 
   beat:
+    logging: *logging
     <<: *backend
     command: [celery, -A, 'app.worker:celery', beat, '--loglevel=INFO', '--schedule=/app/run/celerybeat-schedule']
     depends_on: *dependencies
 
   web:
+    logging: *logging
     image: presentation-maker-web:local
     build:
       context: ./frontend

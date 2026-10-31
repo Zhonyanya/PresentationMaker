@@ -41,7 +41,8 @@ export function decodeText(buffer: ArrayBuffer): string {
   if (bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes)
   // ZIP (например, .docx с расширением .txt) или бинарный файл: в тексте нулевых байтов не бывает
   const sample = bytes.subarray(0, 8192)
-  if ((bytes[0] === 0x50 && bytes[1] === 0x4b) || sample.filter((b) => b === 0).length > sample.length / 100) {
+  const zip = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04
+  if (zip || sample.filter((b) => b === 0).length > sample.length / 100) {
     throw new FileImportError('Файл не похож на текстовый. Сохраните документ как .txt или .docx.')
   }
   try {
@@ -65,15 +66,49 @@ async function assertUnpackedSize(buffer: ArrayBuffer) {
   } catch {
     throw new FileImportError(UNREADABLE)
   }
+  const tooLarge = () => new FileImportError('Документ слишком большой после распаковки. Вставьте нужный фрагмент текста вручную.')
+  // Картинки не распаковываются: текст из них не нужен
+  const entries = Object.values(zip.files).filter((entry) => !entry.dir && !entry.name.startsWith('word/media/'))
+  // Быстрая проверка по размерам из заголовков архива
+  let declared = 0
+  for (const entry of entries) declared += (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? 0
+  if (declared > MAX_DOCX_UNPACKED) throw tooLarge()
+  // Заголовки можно подделать, поэтому считаем реально распакованные байты потоком
+  // и останавливаемся, как только бюджет исчерпан
   let total = 0
-  zip.forEach((path, entry) => {
-    // Картинки не распаковываются: текст из них не нужен
-    if (path.startsWith('word/media/')) return
-    total += (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? 0
-  })
-  if (total > MAX_DOCX_UNPACKED) {
-    throw new FileImportError('Документ слишком большой после распаковки. Вставьте нужный фрагмент текста вручную.')
+  for (const entry of entries) {
+    total += await inflatedSize(entry as unknown as StreamableEntry, MAX_DOCX_UNPACKED - total)
+    if (total > MAX_DOCX_UNPACKED) throw tooLarge()
   }
+}
+
+/** Часть публичного API JSZip, не описанная в его типах */
+interface StreamableEntry {
+  internalStream(type: 'uint8array'): {
+    on(event: 'data', listener: (chunk: Uint8Array) => void): unknown
+    on(event: 'error', listener: (error: Error) => void): unknown
+    on(event: 'end', listener: () => void): unknown
+    pause(): unknown
+    resume(): unknown
+  }
+}
+
+/** Сколько байт даёт распаковка части архива — не больше budget + один фрагмент. */
+function inflatedSize(entry: StreamableEntry, budget: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const stream = entry.internalStream('uint8array')
+    stream.on('data', (chunk) => {
+      size += chunk.length
+      if (size > budget) {
+        stream.pause()
+        resolve(size)
+      }
+    })
+    stream.on('error', () => reject(new FileImportError(UNREADABLE)))
+    stream.on('end', () => resolve(size))
+    stream.resume()
+  })
 }
 
 async function readDocx(file: File): Promise<string> {

@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { MotionConfig } from 'motion/react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
+import { MotionConfig, useReducedMotion } from 'motion/react'
 import { env } from '@/config/env'
-import { createServerApi, type AcceptedJob, type CurrentPresentation, type JobStatus, type ServerUser } from '@/api/server-api'
+import { createServerApi, type AcceptedJob, type CurrentPresentation, type JobStatus, type LibraryItem, type ServerUser } from '@/api/server-api'
 import { toApiError } from '@/api/errors'
 import type { GenerateRequest } from '@/domain/presentation'
 import { useEditorStore, selectSelectedSlide } from '@/store/editor-store'
@@ -11,7 +11,7 @@ import { usePresentationScenes } from '@/hooks/usePresentationScenes'
 import { CreatePage } from '@/features/create/CreatePage'
 import { ReadyCurtain } from '@/features/generation/ReadyCurtain'
 import { AuthScreen, SessionCheck, type AuthKind } from './AuthScreen'
-import { AccountControls, JobWaiting, Notice, PausedJob, ServerEditor, type JobKind } from './ServerWorkspace'
+import { AccountControls, JobWaiting, Library, Notice, PausedJob, ServerEditor, type JobKind } from './ServerWorkspace'
 import { useMlStub } from '@/components/app/ModeBadges'
 import { Button } from '@/components/ui/button'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -60,8 +60,12 @@ function Workspace() {
   const [jobKind, setJobKind] = useState<JobKind>(null)
   const [jobStartedAt, setJobStartedAt] = useState<number | null>(null)
   const [ready, setReady] = useState<number | null>(null)
+  const [library, setLibrary] = useState<LibraryItem[]>([])
   const jobKindRef = useRef<JobKind>(null)
   const editorRef = useRef(false)
+  const waitingRef = useRef(false)
+  waitingRef.current = waiting
+  const reduceMotion = useReducedMotion()
   const mlStubRef = useRef(false)
   mlStubRef.current = useMlStub()
   jobKindRef.current = jobKind
@@ -141,7 +145,7 @@ function Workspace() {
     // resetting anyway would also abort the parallel bootstrap request.
     const unauthorized = () => {
       if (!userRef.current) return
-      clearPrivate(); setError('Сессия истекла. Войдите снова.')
+      clearPrivate(); setError('Сессия завершена. Войдите снова.')
     }
     // Covers cookie changes made outside this app, as well as session expiry in a background tab.
     // The same user signing in again elsewhere keeps this tab's unsent work; only the CSRF token
@@ -166,7 +170,9 @@ function Workspace() {
   const jobId = job?.job_id
   const jobPresentationId = job?.presentation_id
   useEffect(() => {
-    if (!jobId || !jobPresentationId || !user || !waiting) return
+    // Опрос идёт и при приостановленном ожидании (реже): иначе интерфейс считал бы задание
+    // выполняющимся вечно и не давал начать новое
+    if (!jobId || !jobPresentationId || !user) return
     const controller = new AbortController()
     const activeEpoch = epoch.current
     let timer: ReturnType<typeof setTimeout>
@@ -179,7 +185,7 @@ function Workspace() {
         failures = 0
         setPhase(status.phase)
         if (status.status === 'queued' || status.status === 'running') {
-          later(globalThis.document.hidden ? 10000 : 2500)
+          later(!waitingRef.current || globalThis.document.hidden ? 10000 : 2500)
           return
         }
         const value = await api.current(jobPresentationId, controller.signal)
@@ -189,12 +195,19 @@ function Workspace() {
           later(2500)
           return
         }
+        const paused = !waitingRef.current && !editorRef.current
         applyCurrent(value)
         setJob(value.active_job); setWaiting(Boolean(value.active_job))
         saveReference(user, value.presentation_id, value.active_job)
         const kind = jobKindRef.current
         setJobKind(null)
-        if (status.status === 'succeeded') {
+        if (status.status === 'succeeded' && paused) {
+          // Пользователь ушёл к форме: не перебрасываем его, а предлагаем открыть результат
+          setInstruction('')
+          toast.success(kind === 'revise' ? 'Правка применена' : 'Презентация готова', {
+            action: { label: 'Открыть', onClick: () => setEditor(true) },
+          })
+        } else if (status.status === 'succeeded') {
           // Moment of "Готово" between waiting and the editor, as in the demo flow
           if (value.document && kind !== 'revise' && !editorRef.current) setReady(value.document.slides.length)
           if (kind === 'revise') {
@@ -223,6 +236,20 @@ function Workspace() {
     return () => { controller.abort(); clearTimeout(timer) }
   }, [jobId, jobPresentationId, user, waiting, applyCurrent])
 
+  const refreshLibrary = useCallback(async () => {
+    try {
+      setLibrary(await api.list())
+    } catch {
+      /* Список вторичен: ошибка сети не должна заслонять основной сценарий */
+    }
+  }, [])
+  // Обновляем после входа, завершения задания и смены документа
+  const documentToken = current?.document_token
+  useEffect(() => {
+    if (user) void refreshLibrary()
+    else setLibrary([])
+  }, [user, jobId, documentToken, refreshLibrary])
+
   const authenticate = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError('')
     const activeEpoch = epoch.current
@@ -241,6 +268,8 @@ function Workspace() {
     setBusy(true)
     try {
       await api.logout()
+      // На общем компьютере следующий человек не должен видеть ссылку на чужую работу
+      if (userRef.current) safeStorage.removeItem(referenceKey(userRef.current))
       clearPrivate()
       safeStorage.setItem('pm:auth-change', randomKey())
     } catch (cause) { setError(toApiError(cause).message) }
@@ -289,6 +318,13 @@ function Workspace() {
     } catch (cause) { if (activeEpoch === epoch.current) setError(toApiError(cause).message) }
   }
 
+  // Новый экран открывается с начала: иначе на телефоне заголовок ожидания и превью
+  // слайда оказываются выше видимой области. Форма сама прокручивается к рабочей области.
+  const screenKind = editor ? 'editor' : job && waiting ? 'waiting' : 'create'
+  useLayoutEffect(() => {
+    if (screenKind !== 'create') window.scrollTo(0, 0)
+  }, [screenKind])
+
   if (initializing) return <SessionCheck />
   if (!user) return <AuthScreen kind={authKind} login={login} password={password} error={error} busy={busy}
     onKindChange={(kind) => { setAuthKind(kind); setError('') }} onLoginChange={setLogin} onPasswordChange={setPassword}
@@ -302,6 +338,44 @@ function Workspace() {
     useEditorStore.getState().close(); useFlowStore.getState().clearDraft(); safeStorage.removeItem(referenceKey(user))
   }
   const leaveWaiting = () => { setWaiting(false); setEditor(false) }
+  const openPresentation = async (id: string) => {
+    const activeEpoch = epoch.current
+    setBusy(true); setError('')
+    try {
+      const value = await api.current(id)
+      if (activeEpoch !== epoch.current) return
+      applyCurrent(value); setJob(value.active_job); setWaiting(Boolean(value.active_job)); setJobKind(null)
+      setJobStartedAt(value.active_job ? Date.now() : null)
+      setEditor(Boolean(value.document)); setInstruction(''); setTargets(''); submission.current = null
+      saveReference(user, value.presentation_id, value.active_job)
+    } catch (cause) {
+      if (activeEpoch === epoch.current) setError(toApiError(cause).message)
+    } finally { if (activeEpoch === epoch.current) setBusy(false) }
+  }
+  const deletePresentation = async (id: string) => {
+    setBusy(true); setError('')
+    try {
+      await api.remove(id)
+      if (current?.presentation_id === id) startNew()
+      toast.success('Презентация удалена')
+      void refreshLibrary()
+    } catch (cause) {
+      setError(toApiError(cause).message)
+    } finally { setBusy(false) }
+  }
+  const deleteAccount = async (accountPassword: string): Promise<string | null> => {
+    setBusy(true)
+    try {
+      await api.deleteAccount(accountPassword)
+      safeStorage.removeItem(referenceKey(user))
+      clearPrivate()
+      safeStorage.setItem('pm:auth-change', randomKey())
+      toast.success('Аккаунт и все данные удалены')
+      return null
+    } catch (cause) {
+      return toApiError(cause).message
+    } finally { setBusy(false) }
+  }
   const resumeWaiting = () => setWaiting(true)
   const account = <AccountControls login={user.login} busy={busy} canStartNew={!busy && !job} onNew={startNew} onLogout={() => void logout()} />
   const notice = error ? (
@@ -344,15 +418,21 @@ function Workspace() {
         serverMode
         headerSlot={account}
         startAtWorkspace={Boolean(job || current)}
-        notice={(notice || job) && <>{notice}{job && <PausedJob phase={phase} onResume={resumeWaiting} />}</>}
+        notice={<>
+          {notice}
+          {job && <PausedJob phase={phase} onResume={resumeWaiting} />}
+          <Library items={library} currentId={current?.presentation_id ?? null} busy={busy || Boolean(job)}
+            onOpen={(id) => void openPresentation(id)} onDelete={(id) => void deletePresentation(id)} onDeleteAccount={deleteAccount} />
+        </>}
         onGenerate={(body) => void launch('generate', body)}
         onOpenCurrent={() => setEditor(true)}
+        onDiscardCurrent={startNew}
       />
     )
   }
 
   return <>
     {screen}
-    {ready !== null && <ReadyCurtain slideCount={ready} onDone={() => setReady(null)} />}
+    {ready !== null && !reduceMotion && <ReadyCurtain slideCount={ready} onDone={() => setReady(null)} />}
   </>
 }

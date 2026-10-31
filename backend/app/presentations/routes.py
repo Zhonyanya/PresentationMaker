@@ -9,8 +9,8 @@ from sqlalchemy import select
 from app.auth.service import DB, CurrentUser, authenticated_csrf_guard, rate_limit
 from app.core.config import get_settings
 from app.core.errors import AppError
-from app.db.models import Job, Presentation
-from app.jobs.service import ACTIVE, accepted, submit
+from app.db.models import Job, Presentation, utcnow
+from app.jobs.service import ACTIVE, accepted, owned_presentation, submit
 from app.presentations.schemas import GenerateRequest, RegenerateRequest, ReviseRequest
 
 router = APIRouter(tags=["presentations"])
@@ -85,6 +85,60 @@ async def revise(identifier: UUID, body: ReviseRequest, user: CurrentUser, db: D
     return await enqueue(db, user, key, body, identifier)
 
 
+@router.get("/presentations")
+async def presentations(user: CurrentUser, db: DB):
+    """Список презентаций владельца без исходных текстов и содержимого слайдов.
+
+    Квота ограничивает их число сотней на пользователя, поэтому ответ без пагинации.
+    """
+    rows = (
+        await db.execute(
+            select(Presentation, Job.id)
+            .outerjoin(
+                Job,
+                (Job.presentation_id == Presentation.id) & Job.status.in_(ACTIVE),
+            )
+            .where(Presentation.owner_id == user.id, Presentation.deleted_at.is_(None))
+            .order_by(Presentation.updated_at.desc())
+            .limit(100)
+        )
+    ).all()
+    return {
+        "presentations": [
+            {
+                "presentation_id": str(presentation.id),
+                "title": presentation.document["title"] if presentation.document else None,
+                "slide_count": presentation.slide_count,
+                "updated_at": presentation.updated_at.isoformat(),
+                "active": active is not None,
+            }
+            for presentation, active in rows
+        ]
+    }
+
+
+@router.delete(
+    "/presentations/{identifier}",
+    status_code=204,
+    dependencies=[Depends(authenticated_csrf_guard)],
+)
+async def delete_presentation(identifier: UUID, user: CurrentUser, db: DB):
+    """Безвозвратно стирает исходный текст и документ; удалённая презентация даёт 404.
+
+    Пустая строка остаётся для учёта квот заданий, иначе удаление обнуляло бы
+    суточный лимит генераций. Пока идёт задание, удаление отклоняется (409).
+    """
+    presentation = await owned_presentation(db, user.id, identifier, lock=True)
+    if await db.scalar(
+        select(Job.id).where(Job.presentation_id == identifier, Job.status.in_(ACTIVE))
+    ):
+        raise AppError(409, "JOB_ALREADY_ACTIVE", "Дождитесь завершения задания.")
+    presentation.source_text = ""
+    presentation.document = presentation.document_token = presentation.slide_count = None
+    presentation.deleted_at = presentation.updated_at = utcnow()
+    await db.commit()
+
+
 @router.get("/presentations/{identifier}")
 async def current(identifier: UUID, user: CurrentUser, db: DB):
     """Возвращает текущий документ и активное задание из одного снимка БД.
@@ -100,7 +154,11 @@ async def current(identifier: UUID, user: CurrentUser, db: DB):
                 Job,
                 (Job.presentation_id == Presentation.id) & Job.status.in_(ACTIVE),
             )
-            .where(Presentation.id == identifier, Presentation.owner_id == user.id)
+            .where(
+                Presentation.id == identifier,
+                Presentation.owner_id == user.id,
+                Presentation.deleted_at.is_(None),
+            )
         )
     ).one_or_none()
     if row is None:

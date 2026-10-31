@@ -41,16 +41,14 @@ export function EditorHeader({ title, onTitleChange, onBack, onExport, extra }: 
         />
       </div>
 
-      <div className="flex shrink-0 items-center gap-3">
+      <div className="flex shrink-0 items-center gap-1.5 sm:gap-3">
         <span className="hidden items-center gap-1.5 text-xs text-muted-foreground xl:flex" aria-live="polite">
           <Check className="size-3.5 text-success" aria-hidden />
           {onTitleChange ? 'Сохранено в браузере' : 'Текущий документ сервера'}
         </span>
-        <div className="max-md:hidden">
-          <ModeBadges />
-        </div>
+        <ModeBadges />
         {extra}
-        <Button onClick={onExport} className="max-sm:px-3">
+        <Button onClick={onExport} className="max-sm:px-3" data-export-trigger>
           <Download />
           <span className="max-sm:sr-only">Скачать PPTX</span>
         </Button>

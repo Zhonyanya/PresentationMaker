@@ -32,7 +32,9 @@ async def owned_presentation(db: AsyncSession, owner: UUID, identifier: UUID, *,
         AppError: Если презентации нет или она принадлежит другому пользователю (404).
     """
     query = select(Presentation).where(
-        Presentation.id == identifier, Presentation.owner_id == owner
+        Presentation.id == identifier,
+        Presentation.owner_id == owner,
+        Presentation.deleted_at.is_(None),
     )
     if lock:
         query = query.with_for_update()
@@ -129,12 +131,17 @@ async def submit(db: AsyncSession, owner: UUID, key: str, body, identifier: UUID
     if daily_total >= settings.max_daily_jobs or total_jobs >= settings.max_jobs:
         raise AppError(503, "SERVICE_JOB_LIMIT", "Достигнут лимит заданий сервиса.")
     if presentation is None:
+        # Удалённые презентации освобождают квоту; задания по ним продолжают учитываться
         user_presentations = await db.scalar(
-            select(func.count()).select_from(Presentation).where(Presentation.owner_id == owner)
+            select(func.count())
+            .select_from(Presentation)
+            .where(Presentation.owner_id == owner, Presentation.deleted_at.is_(None))
         )
         if user_presentations >= settings.max_presentations_per_user:
             raise AppError(429, "USER_JOB_LIMIT", "Достигнут лимит презентаций пользователя.")
-        total_presentations = await db.scalar(select(func.count()).select_from(Presentation))
+        total_presentations = await db.scalar(
+            select(func.count()).select_from(Presentation).where(Presentation.deleted_at.is_(None))
+        )
         if total_presentations >= settings.max_presentations:
             raise AppError(503, "SERVICE_JOB_LIMIT", "Достигнут лимит презентаций сервиса.")
     if isinstance(body, ReviseRequest):

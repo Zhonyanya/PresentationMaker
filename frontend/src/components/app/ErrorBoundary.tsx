@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { BrandMark } from './BrandMark'
 import { safeStorage } from '@/lib/storage'
+import { env } from '@/config/env'
 
 /** Ключи, которые приложение хранит в браузере: черновики демо-режима и ссылки на документы */
 const STORED_PREFIXES = ['ai-presentations:', 'pm:current:']
@@ -19,8 +20,8 @@ function resetStoredDrafts() {
  * Последний рубеж: неожиданная ошибка отрисовки показывает понятный экран
  * с выходом, а не пустую страницу, которая повторяется при каждом обновлении.
  */
-export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
-  state = { failed: false }
+export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean; confirming: boolean }> {
+  state = { failed: false, confirming: false }
 
   static getDerivedStateFromError() {
     return { failed: true }
@@ -38,8 +39,11 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: 
           <BrandMark className="size-10 text-[24px]" />
           <h1 className="mt-8 font-display text-[clamp(2.2rem,5vw,3rem)] leading-none font-[340] tracking-[-0.03em]">Что-то пошло не так</h1>
           <p className="mt-5 text-[15px] leading-relaxed text-muted-foreground">
-            Страница не смогла отобразиться. Обычно помогает обновление. Если ошибка повторяется, сбросьте черновик, сохранённый в
-            этом браузере: документы на сервере не пострадают.
+            Страница не смогла отобразиться. Обычно помогает обновление. Если ошибка повторяется, сбросьте данные, сохранённые в этом
+            браузере.{' '}
+            {env.apiMode === 'http'
+              ? 'Презентации хранятся на сервере и не пострадают.'
+              : 'В демо-режиме это удалит и черновик презентации — он хранится только здесь.'}
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <button
@@ -52,12 +56,14 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: 
             <button
               type="button"
               onClick={() => {
+                // Второе нажатие подтверждает: сброс в демо-режиме необратим
+                if (!this.state.confirming) return this.setState({ confirming: true })
                 resetStoredDrafts()
                 window.location.reload()
               }}
               className="h-10 rounded-[3px] border border-foreground/25 px-5 text-[14px] font-medium outline-none hover:border-foreground focus-visible:ring-2 focus-visible:ring-foreground focus-visible:ring-offset-2"
             >
-              Сбросить черновик
+              {this.state.confirming ? 'Точно сбросить? Нажмите ещё раз' : 'Сбросить данные браузера'}
             </button>
           </div>
         </div>

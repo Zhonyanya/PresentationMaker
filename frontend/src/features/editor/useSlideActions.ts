@@ -53,7 +53,7 @@ export function useSlideActions() {
     if (!result) return
     toast(`Макет: «${getLayout(layout).label}»`, {
       description: result.trimmed
-        ? 'Часть текста не поместилась в макет и обрезана. Нажмите «Отменить», чтобы вернуть.'
+        ? 'Часть текста не поместилась в этот макет — она перенесена в заметки докладчика. «Отменить» вернёт как было.'
         : 'Текст перенесён в новый макет',
       duration: UNDO_TOAST_MS,
       action: {

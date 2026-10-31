@@ -53,6 +53,10 @@ celery.conf.update(
 )
 
 
+# Переменные окружения, которые не передаются в процесс ML-модуля
+ML_HIDDEN_ENV = {"PM_DATABASE_URL", "PM_REDIS_URL", "PM_TEST_DATABASE_URL", "PM_TEST_REDIS_URL"}
+
+
 class TaskStateUnavailable(RuntimeError):
     """Безопасная ошибка доставки без приватного контекста исходного исключения."""
 
@@ -235,8 +239,13 @@ def call_ml(identifier, attempt, kind, snapshot, deadline):
             stderr=subprocess.DEVNULL,
             start_new_session=True,
             pass_fds=(parent_read,),
-            # Протокол — JSON в UTF-8 независимо от локали контейнера
-            env={**os.environ, "PYTHONUTF8": "1"},
+            # Протокол — JSON в UTF-8 независимо от локали контейнера. Адреса и пароли
+            # БД/Redis ML-модулю не нужны: недоверенный код не должен их видеть.
+            env={
+                **{k: v for k, v in os.environ.items() if k not in ML_HIDDEN_ENV},
+                "PYTHONUTF8": "1",
+                "PM_ML_SUBPROCESS": "1",
+            },
         )
     except BaseException:
         os.close(parent_write)
@@ -455,12 +464,6 @@ def maintenance():
                 job.input_snapshot = {}
             elif job.status == "queued":
                 dispatch.append(job.id)
-        db.execute(
-            delete(Session).where(
-                (Session.expires_at <= now)
-                | (Session.last_seen_at <= now - timedelta(hours=settings.session_idle_hours))
-            )
-        )
         # Старые версии могли оставить приватные снимки уже завершённых заданий.
         stale = db.scalars(
             select(Job)
@@ -472,3 +475,19 @@ def maintenance():
             job.input_snapshot = {}
     for identifier in dispatch:
         dispatch_job(identifier)
+    # Сессии чистятся отдельной транзакцией и порциями: таймаут на большом объёме
+    # не должен откатывать восстановление заданий выше
+    try:
+        with sync_sessions()() as db, db.begin():
+            expired = (
+                select(Session.id)
+                .where(
+                    (Session.expires_at <= now)
+                    | (Session.last_seen_at <= now - timedelta(hours=settings.session_idle_hours))
+                )
+                .limit(5000)
+                .scalar_subquery()
+            )
+            db.execute(delete(Session).where(Session.id.in_(expired)))
+    except Exception as exc:
+        logger.warning("session_cleanup_failed error_type=%s", type(exc).__name__)

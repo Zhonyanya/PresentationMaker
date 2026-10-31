@@ -69,7 +69,7 @@ export function ModeBadges({ showTheme = true }: { showTheme?: boolean }) {
       {showTheme && !presentationTheme.isOfficial && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Badge variant="outline" tabIndex={0} className={`${badgeTrigger} max-sm:hidden`}>
+            <Badge variant="outline" tabIndex={0} className={`${badgeTrigger} max-lg:hidden`}>
               Временная тема
             </Badge>
           </TooltipTrigger>

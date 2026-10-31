@@ -83,17 +83,52 @@ function convertUnfitted(slide: Slide, layout: SlideLayout): Slide {
   return { ...fields, id: slide.id, layout, notes: slide.notes ?? '' } as unknown as Slide
 }
 
-/** Переносит содержимое в другой макет; лишнее сверх пределов схемы обрезается. */
-export function convertSlide(slide: Slide, layout: SlideLayout): Slide {
-  if (slide.layout === layout) return slide
-  return fitSlide(convertUnfitted(slide, layout))
+/** Видимые тексты слайда (без заметок) — чтобы понять, что не перенеслось в новый макет */
+function textPieces(slide: Slide): string[] {
+  const fields = slide as Record<string, unknown>
+  const pieces: string[] = []
+  for (const key of ['title', 'subtitle', 'caption', 'leftTitle', 'rightTitle']) {
+    const value = fields[key]
+    if (typeof value === 'string' && value.trim()) pieces.push(value.trim())
+  }
+  if (typeof fields.body === 'string') pieces.push(...paragraphsOf(fields.body).map((p) => p.trim()).filter(Boolean))
+  for (const key of LIST_FIELDS) {
+    const value = fields[key]
+    if (Array.isArray(value)) pieces.push(...(value as string[]).map((item) => item.trim()).filter(Boolean))
+  }
+  return pieces
 }
 
-/** Не поместится ли часть текста при смене макета (например, 2 × 12 пунктов в один список) */
+/**
+ * Переносит содержимое в другой макет. Макеты вмещают разное (у титульного нет
+ * списка, у списка — подписи), поэтому всё, что не попало в новый макет или не
+ * влезло в пределы схемы, дописывается в заметки докладчика, а не теряется.
+ */
+export function convertSlideReport(slide: Slide, layout: SlideLayout): { slide: Slide; moved: string[] } {
+  if (slide.layout === layout) return { slide, moved: [] }
+  const fitted = fitSlide(convertUnfitted(slide, layout))
+  // Точное сравнение с учётом повторов: одинаковые пункты в двух колонках — разные тексты
+  const kept = new Map<string, number>()
+  for (const piece of textPieces(fitted)) kept.set(piece, (kept.get(piece) ?? 0) + 1)
+  const moved = textPieces(slide).filter((piece) => {
+    const left = kept.get(piece) ?? 0
+    if (left > 0) kept.set(piece, left - 1)
+    return left === 0
+  })
+  if (!moved.length) return { slide: fitted, moved }
+  const notes = [fitted.notes?.trim(), 'Не поместилось при смене макета:', ...moved.map((piece) => `— ${piece}`)]
+    .filter(Boolean)
+    .join('\n')
+  return { slide: fitSlide({ ...fitted, notes } as Slide), moved }
+}
+
+export function convertSlide(slide: Slide, layout: SlideLayout): Slide {
+  return convertSlideReport(slide, layout).slide
+}
+
+/** Часть текста при смене макета уйдёт в заметки (например, пункты списка на титульном) */
 export function convertLosesContent(slide: Slide, layout: SlideLayout): boolean {
-  if (slide.layout === layout) return false
-  const converted = convertUnfitted(slide, layout)
-  return fitSlide(converted) !== converted
+  return convertSlideReport(slide, layout).moved.length > 0
 }
 
 export function updateSlide(presentation: Presentation, id: string, patch: Partial<Slide>): Presentation {

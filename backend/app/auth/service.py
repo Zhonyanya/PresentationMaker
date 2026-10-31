@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import re
 import secrets
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -19,13 +20,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.db.engine import database
-from app.db.models import Session, User, utcnow
+from app.db.models import Job, Presentation, Session, User, utcnow
+from app.jobs.service import ACTIVE
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 DB = Annotated[AsyncSession, Depends(database)]
 password_hash = PasswordHash.recommended()
 # Фиктивный Argon2id-хеш создаётся один раз на процесс, а не на каждый неизвестный логин.
 DUMMY_HASH = password_hash.hash(secrets.token_urlsafe(32))
+# Формат выдаваемых токенов (token_urlsafe(32)); остальное отклоняется без запроса к БД
+TOKEN_FORMAT = re.compile(r"[A-Za-z0-9_-]{32,128}")
 
 
 class Credentials(BaseModel):
@@ -74,19 +78,17 @@ async def rate_limit(
 
 
 async def auth_limits(request: Request):
-    """Ограничивает вход и регистрацию до открытия сессии БД.
+    """Ограничивает вход и регистрацию с одного IP до открытия сессии БД.
 
-    Заведомо отсутствующая сессия по-прежнему даёт 403 без Redis и SQL.
-    Случайная cookie не позволяет обойти ранние лимиты IP и сервиса.
+    Заведомо отсутствующая сессия по-прежнему даёт 403 без Redis и SQL. Общий
+    лимит сервиса расходуется позже, только после проверки CSRF (global_auth_limit):
+    иначе поток мусорных запросов исчерпал бы его и закрыл вход всем.
     """
     settings = get_settings()
     token = request.cookies.get(settings.cookie_name)
-    if not token or len(token) > 128:
+    if not token or not TOKEN_FORMAT.fullmatch(token):
         await csrf_guard(request, None)
     await rate_limit(request, "auth", settings.auth_requests_per_minute)
-    await rate_limit(
-        request, "auth-global", settings.global_auth_requests_per_minute, identity="service"
-    )
 
 
 async def account_auth_limits(request: Request, body: Credentials) -> Credentials:
@@ -153,7 +155,7 @@ async def current_session(request: Request, db: DB) -> Session | None:
         Действующая предварительная или пользовательская сессия, иначе None.
     """
     token = request.cookies.get(get_settings().cookie_name)
-    if not token or len(token) > 128:
+    if not token or not TOKEN_FORMAT.fullmatch(token):
         return None
     row = await db.scalar(select(Session).where(Session.token_hash == digest(token)))
     now = utcnow()
@@ -197,6 +199,24 @@ async def csrf_guard(request: Request, session: SessionDep) -> Session:
 
 
 CsrfSession = Annotated[Session, Depends(csrf_guard)]
+
+
+async def global_auth_limit(request: Request, session: CsrfSession) -> Session:
+    """Общий лимит входа и регистрации, считаемый только после проверки CSRF.
+
+    Для расхода нужна настоящая предварительная сессия с токеном, а её выдача
+    ограничена по IP, поэтому мусорные запросы не закрывают вход остальным.
+    """
+    await rate_limit(
+        request,
+        "auth-global",
+        get_settings().global_auth_requests_per_minute,
+        identity="service",
+    )
+    return session
+
+
+CountedCsrfSession = Annotated[Session, Depends(global_auth_limit)]
 
 
 async def user_required(session: SessionDep, db: DB) -> User:
@@ -305,7 +325,7 @@ async def rotate_session(db: AsyncSession, response: Response, old: Session, use
 
 @router.post("/register", status_code=201, dependencies=[Depends(auth_limits)])
 async def register(
-    body: AuthCredentials, request: Request, response: Response, db: DB, old: CsrfSession
+    body: AuthCredentials, request: Request, response: Response, db: DB, old: CountedCsrfSession
 ):
     """Регистрирует пользователя с учётом допуска и квот, затем заменяет сессию.
 
@@ -316,6 +336,11 @@ async def register(
     if not settings.registration_open:
         raise AppError(403, "HTTP_ERROR", "Самостоятельная регистрация отключена.")
     async with password_slot(request, db):
+        # Занятый логин отклоняется до расхода общей квоты регистраций
+        taken = await db.scalar(select(User.id).where(User.login_normalized == body.login.lower()))
+        await db.commit()
+        if taken:
+            raise AppError(409, "LOGIN_UNAVAILABLE", "Этот логин недоступен.")
         await rate_limit(
             request,
             "register-global",
@@ -341,7 +366,7 @@ async def register(
 
 @router.post("/login", dependencies=[Depends(auth_limits)])
 async def login(
-    body: AuthCredentials, request: Request, response: Response, db: DB, old: CsrfSession
+    body: AuthCredentials, request: Request, response: Response, db: DB, old: CountedCsrfSession
 ):
     """Проверяет пароль вне цикла событий, обновляет хеш и заменяет сессию.
 
@@ -390,3 +415,52 @@ async def logout(response: Response, db: DB, session: AuthenticatedCsrfSession):
 @router.get("/me")
 async def me(user: CurrentUser):
     return {"user": public_user(user)}
+
+
+class AccountDeletion(BaseModel):
+    """Подтверждение удаления аккаунта текущим паролем."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+    password: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+
+
+@router.delete("/me", status_code=204, dependencies=[Depends(auth_limits)])
+async def delete_account(
+    body: AccountDeletion,
+    request: Request,
+    response: Response,
+    db: DB,
+    user: CurrentUser,
+    session: AuthenticatedCsrfSession,
+):
+    """Удаляет аккаунт со всеми презентациями, заданиями и сессиями без возможности отмены.
+
+    Нужен текущий пароль; пока выполняется задание, удаление отклоняется (409),
+    чтобы worker не публиковал результат в удалённые данные.
+    """
+    async with password_slot(request, db):
+        valid, _ = await anyio.to_thread.run_sync(
+            password_hash.verify_and_update,
+            body.password,
+            user.password_hash,
+            limiter=request.app.state.password_thread_limiter,
+        )
+        if not valid:
+            raise AppError(403, "INVALID_PASSWORD", "Неверный пароль.")
+        active = await db.scalar(
+            select(Job.id).where(Job.owner_id == user.id, Job.status.in_(ACTIVE)).limit(1)
+        )
+        if active:
+            raise AppError(409, "JOB_ALREADY_ACTIVE", "Дождитесь завершения заданий.")
+        await db.execute(delete(Job).where(Job.owner_id == user.id))
+        await db.execute(delete(Presentation).where(Presentation.owner_id == user.id))
+        await db.execute(delete(Session).where(Session.user_id == user.id))
+        await db.execute(delete(User).where(User.id == user.id))
+        await db.commit()
+    response.delete_cookie(
+        get_settings().cookie_name,
+        path="/",
+        secure=get_settings().secure_cookie,
+        httponly=True,
+        samesite="lax",
+    )

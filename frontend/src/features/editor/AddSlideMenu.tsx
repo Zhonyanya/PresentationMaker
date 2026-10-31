@@ -8,7 +8,12 @@ export function AddSlideMenu({ children, afterId, align = 'start' }: { children:
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
-      <DropdownMenuContent align={align} className="w-64">
+      <DropdownMenuContent
+        align={align}
+        className="w-64"
+        // Фокус уходит в заголовок нового слайда, а не возвращается к кнопке меню
+        onCloseAutoFocus={(event) => event.preventDefault()}
+      >
         <DropdownMenuLabel>Новый слайд после текущего</DropdownMenuLabel>
         {layoutList.map((definition) => {
           const Icon = definition.icon

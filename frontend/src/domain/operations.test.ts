@@ -64,6 +64,28 @@ describe('пределы схемы в редакторе', () => {
   })
 })
 
+describe('смена макета не теряет текст', () => {
+  it('пункты, не вошедшие в титульный, переносятся в заметки', () => {
+    const slide: Slide = { id: 'b', layout: 'bullets', title: 'Итоги', bullets: ['Первый', 'Второй', 'Третий'], notes: 'Старая заметка' }
+    const converted = convertSlide(slide, 'title')
+    expect(convertLosesContent(slide, 'title')).toBe(true)
+    expect(converted.notes).toContain('Старая заметка')
+    expect(converted.notes).toContain('— Второй')
+    expect(converted.notes).toContain('— Третий')
+  })
+
+  it('подпись титульного слайда не пропадает при переходе в список', () => {
+    const slide: Slide = { id: 't', layout: 'title', title: 'Доклад', subtitle: 'Подзаголовок', caption: 'Москва · 2026' }
+    expect(convertSlide(slide, 'bullets').notes).toContain('— Москва · 2026')
+  })
+
+  it('без потерь заметки не трогаются', () => {
+    const slide: Slide = { id: 'b', layout: 'bullets', title: 'Итоги', bullets: ['Один', 'Два'], notes: '' }
+    expect(convertLosesContent(slide, 'text')).toBe(false)
+    expect(convertSlide(slide, 'text').notes).toBe('')
+  })
+})
+
 describe('операции редактора', () => {
   it('не мутируют исходную презентацию', () => {
     const original = samplePresentation()

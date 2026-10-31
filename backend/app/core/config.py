@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     )
 
     environment: str = "production"
+    # Выставляется worker для процесса ML-модуля
+    ml_subprocess: bool = False
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost/presentation_maker"
     redis_url: str = "redis://localhost:6379/0"
     allowed_origins: list[str] = ["http://localhost:5173"]
@@ -43,11 +45,13 @@ class Settings(BaseSettings):
     max_presentations: int = Field(default=5000, gt=0)
     registration_enabled: bool | None = None
     max_users: int = Field(default=10000, gt=0)
-    registrations_per_day: int = Field(default=50, gt=0)
+    # Считаются только попытки с новым логином; занятый логин даёт 409 без расхода квоты
+    registrations_per_day: int = Field(default=500, gt=0)
     session_days: int = Field(default=7, gt=0)
     session_idle_hours: int = Field(default=24, gt=0)
     pre_session_minutes: int = Field(default=20, gt=0)
-    auth_requests_per_minute: int = Field(default=10, gt=0)
+    # Вход и регистрация с одного IP: класс за общим NAT не должен упираться в лимит
+    auth_requests_per_minute: int = Field(default=30, gt=0)
     csrf_requests_per_minute: int = Field(default=30, gt=0)
     account_auth_requests_per_window: int = Field(default=30, gt=0)
     account_auth_window_seconds: int = Field(default=900, gt=0)
@@ -55,8 +59,10 @@ class Settings(BaseSettings):
     # Генерации и правки одного пользователя: квоты заданий не мешают слать запросы впустую
     write_requests_per_minute: int = Field(default=20, gt=0)
     password_concurrency: int = Field(default=2, gt=0)
-    http_body_timeout_seconds: float = Field(default=30, gt=0)
+    http_body_timeout_seconds: float = Field(default=10, gt=0)
     max_http_body_readers: int = Field(default=100, gt=0)
+    # Один адрес не может занять все слоты медленной отправкой тела запроса
+    max_http_body_readers_per_client: int = Field(default=20, gt=0)
     heartbeat_seconds: int = Field(default=15, gt=0)
     worker_lost_seconds: int = Field(default=120, gt=0)
     # Повторная доставка queued-задания, если сообщение потерялось в брокере. Сбой публикации
@@ -110,7 +116,8 @@ class Settings(BaseSettings):
             if ":" in host:
                 # Двоеточия допустимы только внутри IPv6 без скобок, но не как host:port.
                 IPv6Address(host)
-        if self.environment == "production":
+        # Процесс ML не подключается к БД и Redis и не получает их адреса (см. worker.call_ml)
+        if self.environment == "production" and not self.ml_subprocess:
             database = make_url(self.database_url)
             redis = urlsplit(self.redis_url)
             # Плюс пароли из compose.yaml и CI: демо-стенд нельзя перенести в production как есть

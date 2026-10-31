@@ -192,8 +192,10 @@ def test_validation_body_limit_and_private_errors(client):
 
 def test_no_deferred_routes(client):
     routes = client.get("/openapi.json").json()["paths"]
-    assert "/api/v1/presentations" in routes
-    assert "get" not in routes["/api/v1/presentations"]
+    # Список и удаление — часть контракта: пользователь управляет своими данными
+    assert set(routes["/api/v1/presentations"]) == {"get", "post"}
+    assert "delete" in routes["/api/v1/presentations/{identifier}"]
+    assert "delete" in routes["/api/v1/auth/me"]
     assert not any(
         word in path
         for path in routes
