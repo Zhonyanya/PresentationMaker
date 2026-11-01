@@ -133,9 +133,11 @@ Official reference: https://developers.sber.ru/docs/ru/gigachat/guides/structure
 
 ## Economical quality checks
 
-Five explicitly synthetic cases are in `backend/tests/fixtures/ml_quality_cases.json`:
+The original five explicitly synthetic cases in `backend/tests/fixtures/ml_quality_cases.json` comprise
 three existing fictional frontend reports, one short report with caveats, and one
-Unicode/untrusted-quote case. These are not five real-report acceptance documents.
+Unicode/untrusted-quote case. Nine more diverse fictional reports now supplement them
+(14 total); see [ML_SYNTHETIC_CASES.md](ML_SYNTHETIC_CASES.md) for inputs and manual
+review criteria. These are not real-report acceptance documents.
 
 From backend, with GigaChat variables already in the process environment:
 
