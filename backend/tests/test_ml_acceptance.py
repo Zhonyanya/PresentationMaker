@@ -112,3 +112,46 @@ def test_live_cache_cannot_masquerade_as_another_profile(
     with pytest.raises(RuntimeError, match='profile changed'):
         ml_acceptance.main()
     assert len(calls) == 1
+
+
+def test_opt_in_candidate_saved_before_validation_failure(monkeypatch, tmp_path):
+    import json
+
+    import presentation_ml
+    from tools import ml_acceptance
+
+    cases = tmp_path / 'cases.json'
+    cases.write_text(json.dumps([{'id': 'synthetic', 'synthetic': True,
+                                 'text': 'Доклад ' * 20, 'slideCount': 6}]))
+    monkeypatch.setattr(ml_acceptance, 'CASES', cases)
+    output = tmp_path / 'out'
+    monkeypatch.setattr('sys.argv', ['acceptance', '--live', '--case', 'synthetic',
+                                   '--save-candidates', '--output', str(output)])
+    candidate = {'title': 'Synthetic', 'slides': [{'layout': 'unknown', 'title': 'Fact'}]}
+    calls = []
+    def request(**kwargs):
+        calls.append(kwargs)
+        return candidate
+    monkeypatch.setattr(presentation_ml, 'request_document', request)
+    assert ml_acceptance.main() == 1
+    assert len(calls) == 1
+    assert presentation_ml.request_document is request
+    assert json.loads((output / 'synthetic.candidate.json').read_text()) == candidate
+    assert json.loads((output / 'synthetic.json').read_text())['status'] == 'error'
+
+
+def test_candidate_capture_requires_explicit_synthetic_mark(monkeypatch, tmp_path):
+    import json
+
+    from tools import ml_acceptance
+
+    cases = tmp_path / 'cases.json'
+    cases.write_text(json.dumps([{'id': 'unclassified', 'text': 'Доклад ' * 20,
+                                 'slideCount': 6}]))
+    monkeypatch.setattr(ml_acceptance, 'CASES', cases)
+    monkeypatch.setattr('sys.argv', ['acceptance', '--live', '--case', 'unclassified',
+                                   '--save-candidates', '--output', str(tmp_path / 'out')])
+    with pytest.raises(SystemExit) as result:
+        ml_acceptance.main()
+    assert result.value.code == 2
+    assert not (tmp_path / 'out').exists()

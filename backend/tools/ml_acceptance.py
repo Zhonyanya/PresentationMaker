@@ -6,6 +6,7 @@ import json
 import os
 import time
 from collections import Counter
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -13,6 +14,25 @@ from uuid import uuid4
 from app.presentations.schemas import normalize_document
 
 CASES = Path(__file__).resolve().parents[1] / 'tests/fixtures/ml_quality_cases.json'
+
+
+@contextmanager
+def capture_candidate(path):
+    """Opt-in private diagnostic for this sequential synthetic CLI, never server logs."""
+    import presentation_ml
+
+    original = presentation_ml.request_document
+
+    def request(**kwargs):
+        result = original(**kwargs)
+        path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+        return result
+
+    presentation_ml.request_document = request
+    try:
+        yield
+    finally:
+        presentation_ml.request_document = original
 
 
 def safe_error_details(exc):
@@ -73,6 +93,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True,
                         help='Private result directory, preferably outside the repository')
     parser.add_argument('--case', action='append', dest='case_ids')
+    parser.add_argument('--save-candidates', action='store_true',
+                        help='Privately save raw model JSON; only for explicitly synthetic cases')
     args = parser.parse_args()
     if args.live and not args.case_ids:
         parser.error('--live requires explicit --case selections to bound provider usage')
@@ -84,7 +106,11 @@ def main():
         'scope': os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS'),
         'prompt_version': get_prompt_version(),
         'prompt_sha256': hashlib.sha256(build_prompt('generate').encode()).hexdigest(),
-        'generation_policy': 'v3-short-source-budget-v1',
+        'generation_policy': 'v3-short-source-budget-v2-verbatim-pack',
+        'normalization_policy': 'document-title-closing-heading-join-v3',
+        'source_sections_policy': ('headings-v1' if get_prompt_version() in ('v5', 'v6', 'v7')
+                                   else 'none'),
+        'grounding_policy': 'source-quotes-v1' if get_prompt_version() == 'v7' else 'none',
     }
     cases = json.loads(CASES.read_text(encoding='utf-8'))
     if args.case_ids:
@@ -92,6 +118,8 @@ def main():
         if set(args.case_ids) - known:
             parser.error('Unknown case ID')
         cases = [c for c in cases if c['id'] in args.case_ids]
+    if args.save_candidates and any(case.get('synthetic') is not True for case in cases):
+        parser.error('--save-candidates requires synthetic=true for every selected case')
     args.output.mkdir(parents=True, exist_ok=True)
     results = []
     for case in cases:
@@ -119,11 +147,16 @@ def main():
                               encoding='utf-8')
             start = time.monotonic()
             try:
-                document = generate(
-                    text=case['text'], title=case.get('title'), slideCount=case['slideCount'],
-                    job_id=str(uuid4()),
-                    deadline=(datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
-                )
+                from contextlib import nullcontext
+
+                capture = (capture_candidate(target.with_suffix('.candidate.json'))
+                           if args.save_candidates else nullcontext())
+                with capture:
+                    document = generate(
+                        text=case['text'], title=case.get('title'), slideCount=case['slideCount'],
+                        job_id=str(uuid4()),
+                        deadline=(datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+                    )
                 report = dict(inspect_document(document, case), status='ok', cached=False,
                               seconds=round(time.monotonic() - start, 2),
                               model=os.getenv('GIGACHAT_MODEL', ''), generation_profile=profile)
@@ -131,7 +164,9 @@ def main():
                          'document': document}
             except Exception as exc:
                 report = {'status': 'error', **safe_error_details(exc), 'cached': False,
-                          'seconds': round(time.monotonic() - start, 2)}
+                          'seconds': round(time.monotonic() - start, 2),
+                          'generation_profile': profile,
+                          'candidate_saved': target.with_suffix('.candidate.json').is_file()}
                 saved = {'status': 'error', 'source_hash': fingerprint, 'report': report}
             target.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding='utf-8')
         results.append({'id': case['id'], **report})

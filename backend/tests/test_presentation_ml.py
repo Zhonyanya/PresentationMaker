@@ -26,7 +26,11 @@ def provider(monkeypatch, ml, result):
         if kwargs['payload']['operation'] == 'revise':
             if result == {'unsupported': True}:
                 return {'status': 'unsupported', 'document': None}
-            return {'status': 'applied', 'document': copy.deepcopy(result)}
+            response = copy.deepcopy(result)
+            if kwargs['payload'].get('response_scope') == 'selected_slides':
+                wanted = kwargs['payload']['target_slide_ids']
+                response['slides'] = [s for s in response['slides'] if s['id'] in wanted]
+            return {'status': 'applied', 'document': response}
         return copy.deepcopy(result)
 
     monkeypatch.setattr(ml, "request_document", request)
@@ -273,8 +277,9 @@ def test_revision_rejects_deleted_slide(monkeypatch, ml, inputs, document):
     with pytest.raises(ValueError, match='identities or order'):
         revise(ml, inputs, document)
 
-def test_v3_short_source_budget_reaches_provider(monkeypatch, ml, inputs, document):
-    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v3')
+@pytest.mark.parametrize('version', ['v3', 'v4'])
+def test_v3_short_source_budget_reaches_provider(monkeypatch, ml, version, inputs, document):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', version)
     candidate = copy.deepcopy(document)
     candidate['slides'] = [document['slides'][i] for i in (0, 1, 2, 5)]
     calls = provider(monkeypatch, ml, candidate)
@@ -283,10 +288,189 @@ def test_v3_short_source_budget_reaches_provider(monkeypatch, ml, inputs, docume
     assert calls[0]['schema']['properties']['slides']['maxItems'] == 4
 
 
-def test_v3_checks_final_count_after_structural_normalization(monkeypatch, ml, inputs):
-    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v3')
+@pytest.mark.parametrize('version', ['v3', 'v4'])
+def test_v3_checks_final_count_after_structural_normalization(monkeypatch, ml, version, inputs):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', version)
     provider(monkeypatch, ml, {'title': 'Доклад', 'slides': [
-        {'layout': 'text', 'title': str(i), 'body': 'Факт'} for i in range(4)
+        {'layout': 'text', 'title': str(i), 'body': 'Факт ' * 200} for i in range(4)
     ]})
     with pytest.raises(ValueError, match='short-source budget'):
         ml.generate(**dict(inputs, slideCount=8))
+
+
+def test_generated_closing_uses_document_title_without_assuming_language(monkeypatch, ml, inputs):
+    candidate = {'title': 'Incident review', 'slides': [
+        {'layout': 'title', 'title': 'Incident review'},
+        {'layout': 'text', 'title': 'Scope', 'body': 'The root cause is unconfirmed.'},
+    ]}
+    provider(monkeypatch, ml, candidate)
+    result = ml.generate(**inputs)
+    assert result['slides'][-1]['layout'] == 'closing'
+    assert result['slides'][-1]['title'] == 'Incident review'
+    assert result['slides'][1] == dict(candidate['slides'][1], id=result['slides'][1]['id'])
+
+
+@pytest.mark.parametrize('version', ['v3', 'v4'])
+def test_v3_packs_short_sections_without_losing_text_or_notes(monkeypatch, ml, version, inputs):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', version)
+    candidate = {'title': 'Museum review', 'slides': [
+        {'layout': 'title', 'title': 'Museum review'},
+        {'layout': 'bullets', 'title': 'Feedback', 'bullets': ['Calm light', 'Clear labels']},
+        {'layout': 'text', 'title': 'Navigation', 'body': 'Some visitors had difficulty.',
+         'notes': 'Proposal is not approved.'},
+        {'layout': 'bullets', 'title': 'Limits', 'bullets': ['No visitor counts measured',
+                                                         'Budget not approved']},
+    ]}
+    original = copy.deepcopy(candidate)
+    provider(monkeypatch, ml, candidate)
+    result = ml.generate(**dict(inputs, slideCount=8))
+    assert len(result['slides']) == 4
+    assert result['slides'][0]['layout'] == 'title'
+    assert result['slides'][-1]['layout'] == 'closing'
+    visible = '\n'.join(s.get('body', '') for s in result['slides'])
+    for fragment in ('Feedback', 'Calm light', 'Clear labels', 'Navigation',
+                     'Some visitors had difficulty.', 'Limits',
+                     'No visitor counts measured', 'Budget not approved'):
+        assert fragment in visible
+    assert any('Proposal is not approved.' in s.get('notes', '') for s in result['slides'])
+    assert all(len(s.get('body', '')) <= 800 for s in result['slides'])
+    assert candidate == original
+
+def test_generation_joins_heading_with_untitled_content_verbatim(monkeypatch, ml, inputs):
+    candidate = {'title': 'Report', 'slides': [
+        {'layout': 'title', 'title': 'Report'},
+        {'layout': 'title', 'title': 'Before and after', 'caption': 'Evening only',
+         'notes': 'Header note'},
+        {'layout': 'two-column', 'title': '', 'leftTitle': 'Before', 'left': ['14 minutes'],
+         'rightTitle': 'After', 'right': ['11 minutes'], 'notes': 'Content note'},
+        {'layout': 'closing', 'title': 'Report'},
+    ]}
+    snapshot = copy.deepcopy(candidate)
+    provider(monkeypatch, ml, candidate)
+    result = ml.generate(**inputs)
+    assert len(result['slides']) == 3
+    slide = result['slides'][1]
+    assert slide['title'] == 'Before and after'
+    assert slide['layout'] == 'text'
+    for fragment in ('Evening only', 'Before', '14 minutes', 'After', '11 minutes'):
+        assert fragment in slide['body']
+    assert 'Header note' in slide['notes'] and 'Content note' in slide['notes']
+    assert candidate == snapshot
+
+
+def test_v5_extracts_section_labels_as_source_data(monkeypatch, ml, inputs, document):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v5')
+    calls = provider(monkeypatch, ml, document)
+    text = ('Название\n\nОбласть работ\nРаботы проведены только на северном участке.\n\n'
+            'Доступ жителей\nПроход сохранён только для жителей двух домов.\n\n'
+            'Обычный абзац без отдельного заголовка.')
+    ml.generate(**dict(inputs, text=text))
+    assert calls[0]['payload']['source_sections'] == ['Область работ', 'Доступ жителей']
+    assert calls[0]['payload']['text'] == text
+    assert 'critical_facts' not in calls[0]['payload']
+
+
+@pytest.mark.parametrize('quotes,valid', [
+    (['Approved budget: 4.8 million.'], True),
+    (['Approved budget: 9.9 million.'], False),
+    ([], False),
+    ([' ' * 25], False),
+    ('Approved budget: 4.8 million.', False),
+])
+def test_v7_requires_real_source_quotes_and_keeps_them_in_notes(
+        monkeypatch, ml, inputs, quotes, valid):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v7')
+    text = ('Approved budget: 4.8 million. Paid: 3.6 million. '
+            'The remainder is not savings until obligations close. No new actions approved.')
+    candidate = {'title': 'Budget review', 'slides': [
+        {'layout': 'title', 'title': 'Budget review', 'source_quotes': []},
+        {'layout': 'text', 'title': 'Budget', 'body': 'Approved budget: 4.8 million.',
+         'source_quotes': quotes},
+        {'layout': 'closing', 'title': 'Budget review', 'source_quotes': []},
+    ]}
+    snapshot = copy.deepcopy(candidate)
+    calls = provider(monkeypatch, ml, candidate)
+    if valid:
+        result = ml.generate(**dict(inputs, text=text))
+        assert 'Approved budget: 4.8 million.' in result['slides'][1]['notes']
+        assert 'source_quotes' not in result['slides'][1]
+        assert result['slides'][1]['body'] == candidate['slides'][1]['body']
+        assert candidate == snapshot
+        for definition in calls[0]['schema']['$defs'].values():
+            if 'layout' in definition.get('properties', {}):
+                assert 'source_quotes' in definition['required']
+    else:
+        with pytest.raises(ValueError, match='source quote'):
+            ml.generate(**dict(inputs, text=text))
+
+
+def test_scoped_revision_accepts_only_requested_replacements_in_any_response_order(
+        monkeypatch, ml, inputs, document):
+    snapshot = copy.deepcopy(document)
+    replacements = [copy.deepcopy(document['slides'][2]), copy.deepcopy(document['slides'][0])]
+    replacements[0]['notes'] = 'Selected update'
+    calls = []
+    def request(**kwargs):
+        calls.append(kwargs)
+        return {'status': 'applied', 'document': {'title': document['title'],
+                                                'slides': replacements}}
+    monkeypatch.setattr(ml, 'request_document', request)
+    result = revise(ml, inputs, document, [3, 1])
+    assert document == snapshot
+    assert result['slides'][2]['notes'] == 'Selected update'
+    assert [s['id'] for s in result['slides']] == [s['id'] for s in snapshot['slides']]
+    assert result['slides'][1] == snapshot['slides'][1]
+    assert calls[0]['payload']['response_scope'] == 'selected_slides'
+    schema = calls[0]['schema']
+    slides = schema['properties']['document']['anyOf'][0]['properties']['slides']
+    assert slides['minItems'] == slides['maxItems'] == 2
+    for definition in schema['$defs'].values():
+        if 'layout' in definition.get('properties', {}):
+            assert definition['properties']['id']['enum'] == [
+                document['slides'][2]['id'], document['slides'][0]['id']]
+
+
+def test_scoped_revision_keeps_frozen_base_if_provider_mutates_payload(
+        monkeypatch, ml, inputs, document):
+    snapshot = copy.deepcopy(document)
+    def request(**kwargs):
+        kwargs['payload']['document']['slides'][1]['title'] = 'Changed inside provider'
+        return {'status': 'applied', 'document': {'title': document['title'],
+                                                'slides': [copy.deepcopy(document['slides'][2])]}}
+    monkeypatch.setattr(ml, 'request_document', request)
+    assert revise(ml, inputs, document, [3]) == snapshot
+    assert document == snapshot
+
+
+@pytest.mark.parametrize('indices', [[1], [2, 2], []])
+def test_scoped_revision_rejects_unauthorized_duplicate_or_missing_replacements(
+        monkeypatch, ml, inputs, document, indices):
+    snapshot = copy.deepcopy(document)
+    monkeypatch.setattr(ml, 'request_document', lambda **_: {
+        'status': 'applied', 'document': {'title': document['title'],
+            'slides': [copy.deepcopy(document['slides'][i]) for i in indices]},
+    })
+    with pytest.raises(ValueError):
+        revise(ml, inputs, document, [3])
+    assert document == snapshot
+
+
+def test_provider_cannot_change_requested_scope_or_caller_target_lists(
+        monkeypatch, ml, inputs, document):
+    snapshot = copy.deepcopy(document)
+    numbers = [3]
+    targets = [document['slides'][2]['id']]
+    def request(**kwargs):
+        kwargs['payload']['target_slide_ids'][:] = [document['slides'][1]['id']]
+        kwargs['payload']['target_slide_numbers'][:] = [2]
+        replacement = copy.deepcopy(document['slides'][1])
+        replacement['title'] = 'Unauthorized change'
+        return {'status': 'applied', 'document': {'title': document['title'],
+                                                'slides': [replacement]}}
+    monkeypatch.setattr(ml, 'request_document', request)
+    with pytest.raises(ValueError):
+        ml.revise(**inputs, document=document, instruction='Сократи текст',
+                  target_slide_numbers=numbers, target_slide_ids=targets)
+    assert numbers == [3]
+    assert targets == [document['slides'][2]['id']]
+    assert document == snapshot
