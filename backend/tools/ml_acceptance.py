@@ -84,6 +84,7 @@ def main():
         'scope': os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS'),
         'prompt_version': get_prompt_version(),
         'prompt_sha256': hashlib.sha256(build_prompt('generate').encode()).hexdigest(),
+        'generation_policy': 'v3-short-source-budget-v1',
     }
     cases = json.loads(CASES.read_text(encoding='utf-8'))
     if args.case_ids:

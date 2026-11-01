@@ -23,6 +23,10 @@ def provider(monkeypatch, ml, result):
 
     def request(**kwargs):
         calls.append(kwargs)
+        if kwargs['payload']['operation'] == 'revise':
+            if result == {'unsupported': True}:
+                return {'status': 'unsupported', 'document': None}
+            return {'status': 'applied', 'document': copy.deepcopy(result)}
         return copy.deepcopy(result)
 
     monkeypatch.setattr(ml, "request_document", request)
@@ -188,3 +192,101 @@ def test_transport_rejects_incomplete_or_invalid_output(monkeypatch, reason, con
     with pytest.raises(error):
         request_document(system="test", payload={}, schema={}, timeout=60)
     assert client.chat.call_count == 1
+
+def test_revision_schema_fixes_snapshot_slide_count(monkeypatch, ml, inputs, document):
+    calls = provider(monkeypatch, ml, document)
+    revise(ml, inputs, document)
+    slides = calls[0]['schema']['properties']['document']['anyOf'][0]['properties']['slides']
+    assert slides['minItems'] == len(document['slides'])
+    assert slides['maxItems'] == len(document['slides'])
+
+@pytest.mark.parametrize('status', ['applied', 'unsupported'])
+def test_revision_envelope(monkeypatch, ml, inputs, document, status):
+    response = {'status': status, 'document': document if status == 'applied' else None}
+    calls = []
+    def request(**kwargs):
+        calls.append(kwargs)
+        return copy.deepcopy(response)
+    monkeypatch.setattr(ml, 'request_document', request)
+    if status == 'unsupported':
+        with pytest.raises(NotImplementedError):
+            revise(ml, inputs, document)
+    else:
+        assert revise(ml, inputs, document) == document
+    schema = calls[0]['schema']
+    assert schema['type'] == 'object'
+    assert set(schema['required']) == {'status', 'document'}
+    assert schema['properties']['status']['enum'] == ['applied', 'unsupported']
+
+
+@pytest.mark.parametrize('response', [
+    {'status': 'applied', 'document': None},
+    {'status': 'unknown', 'document': None},
+    {'status': 'unsupported', 'document': {'title': 'ambiguous'}},
+    {'status': 'unsupported'},
+    {'status': 'applied', 'document': None, 'extra': True},
+])
+def test_revision_rejects_malformed_envelope(monkeypatch, ml, inputs, document, response):
+    monkeypatch.setattr(ml, 'request_document', lambda **_: copy.deepcopy(response))
+    with pytest.raises(ValueError):
+        revise(ml, inputs, document)
+
+@pytest.mark.parametrize('instruction', [
+    'Удали четвёртый слайд из презентации.',
+    'Добавь новый слайд после второго.',
+    'Перемести слайд 4 в конец.',
+    'Поменяй местами слайды 2 и 3.',
+    'Remove the fourth slide.',
+    'Сократи заголовок. Затем удали слайд 4.',
+])
+def test_explicit_structure_command_refused_without_provider(
+        monkeypatch, ml, inputs, document, instruction):
+    calls = provider(monkeypatch, ml, document)
+    with pytest.raises(NotImplementedError):
+        ml.revise(**inputs, document=document, instruction=instruction,
+                  target_slide_numbers=None, target_slide_ids=None)
+    assert not calls
+
+
+@pytest.mark.parametrize('instruction', [
+    'Удали слово «слайд» из заголовка.',
+    'Не удаляй четвёртый слайд, сократи его текст.',
+    'Добавь пункт в список слайда.',
+    'Do not remove the fourth slide; shorten its title.',
+    'Сократи заголовок слайда.',
+    'Move slide title into the body.',
+    'Add slide title to the second slide.',
+    'Напиши в заголовке «Удали четвёртый слайд».',
+])
+def test_content_or_negated_command_still_reaches_provider(
+        monkeypatch, ml, inputs, document, instruction):
+    calls = provider(monkeypatch, ml, document)
+    ml.revise(**inputs, document=document, instruction=instruction,
+              target_slide_numbers=None, target_slide_ids=None)
+    assert len(calls) == 1
+
+
+def test_revision_rejects_deleted_slide(monkeypatch, ml, inputs, document):
+    candidate = copy.deepcopy(document)
+    candidate['slides'].pop(2)
+    provider(monkeypatch, ml, candidate)
+    with pytest.raises(ValueError, match='identities or order'):
+        revise(ml, inputs, document)
+
+def test_v3_short_source_budget_reaches_provider(monkeypatch, ml, inputs, document):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v3')
+    candidate = copy.deepcopy(document)
+    candidate['slides'] = [document['slides'][i] for i in (0, 1, 2, 5)]
+    calls = provider(monkeypatch, ml, candidate)
+    ml.generate(**dict(inputs, slideCount=8))
+    assert calls[0]['payload']['slideCount'] == 4
+    assert calls[0]['schema']['properties']['slides']['maxItems'] == 4
+
+
+def test_v3_checks_final_count_after_structural_normalization(monkeypatch, ml, inputs):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v3')
+    provider(monkeypatch, ml, {'title': 'Доклад', 'slides': [
+        {'layout': 'text', 'title': str(i), 'body': 'Факт'} for i in range(4)
+    ]})
+    with pytest.raises(ValueError, match='short-source budget'):
+        ml.generate(**dict(inputs, slideCount=8))

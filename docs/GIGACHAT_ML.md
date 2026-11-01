@@ -1,7 +1,8 @@
-# GigaChat ML: first implementation
+# GigaChat ML integration
 
 `backend/presentation_ml` implements `generate` and `revise` from ML_CONTRACT.md.
-One structured-output request is made per operation. There is no automatic
+At most one structured-output request is made per operation. Explicit unsupported
+slide-structure commands can be refused locally without any provider request. There is no automatic
 regeneration or paid fallback. SDK generation retries are explicitly disabled.
 Importing the package does not import the SDK or initialize a client.
 
@@ -16,6 +17,7 @@ worker environment to opt in. v2 passed one live short-report generation in
 passed in 12.03 seconds: only the explicitly requested heading changed, with
 the entire rest of the document compared for exact equality. These are two
 synthetic smoke cases, not a complete quality comparison. v1 remains the default.
+Experimental v3 and its measured limitations are described at the end of this guide.
 
 `transport.request_document` dispatches through the JsonProvider protocol in
 `presentation_ml/providers`. `PM_ML_PROVIDER=gigachat` selects the only currently
@@ -68,7 +70,7 @@ API uses the module for readiness but does not receive provider credentials.
 
 Creating backend/.env alone does NOT pass credentials to Compose containers.
 For the opt-in ML deployment, rebuild the backend image, pass the variables to
-worker through an ignored Compose override/env_file, and set PM_ML_ADAPTER/module
+worker through the opt-in Compose override and its ignored env_file, and set PM_ML_ADAPTER/module
 and PM_ML_MODULE on api too for readiness. The API needs the module available,
 but does not need the provider credential for its import-only readiness probe.
 Keep one ML worker with concurrency=1; do not run other requests against the
@@ -76,13 +78,16 @@ same personal account concurrently. Separate deployments need a shared limiter.
 
 ## Revision behavior
 
-The model returns a full candidate document. The module validates its schema and
+For revision-wire-v2 the model returns an internal object with required status
+and document fields. Applied edits use {"status":"applied","document":<full document>};
+refusals use {"status":"unsupported","document":null}. The module unwraps and
+validates the full candidate document and its
 ordered IDs. For explicit targets, only selected slide objects are copied into
 a deep copy of the original snapshot; its title and other slides remain unchanged.
 This also applies when all slide numbers are explicitly selected. With no target
 lists, the model may revise content and the document title, preserving structure.
 The original input object is never mutated. Unsupported structural operations
-are represented internally by {"unsupported":true} and raised as NotImplementedError.
+are represented internally by the unsupported status and raised as NotImplementedError.
 This internal response is never returned as a presentation document.
 
 For generation, if the candidate starts with a content slide, the module inserts
@@ -114,7 +119,10 @@ Tests substitute the provider boundary; no real credentials are needed.
 Live acceptance must verify authentication, exact model ID, JSON Schema support
 (including unions/references), TLS, refusals, latency/cost and five real reports.
 The one-call baseline cannot mechanically prove factual fidelity or semantic
-identity. Unsupported-command detection currently depends on the model and
+identity. Unambiguous supported-language slide-structure commands are rejected locally before
+provider work. The conservative guard handles explicit Russian/English imperatives,
+excludes tested negated/quoted phrases and does not classify arbitrary language.
+Other unsupported-command detection depends on the model and
 requires adversarial live examples. Do not claim production readiness from
 offline tests. The module reserves ten seconds before the backend deadline.
 If time remains but is insufficient for this reserve, it declines the call as a
@@ -170,3 +178,98 @@ with eight slides. Numeric anchors and the age qualifier (>49) were retained.
 Manual review found a semantic repetition of school internet connectivity on
 slides 2 and 6 despite no exact-string repetition flag. This demonstrates the
 limits of the offline indicators. No additional model judge was called.
+
+## Synthetic acceptance update (2026-11-01)
+
+A paired year-results comparison used identical source/title/requested count (8),
+with the existing v1 result reused. v2 returned eight valid slides in 10.33 s
+(v1: 15.65 s). Both retained the numeric anchors and >49 age qualifier.
+v2 repeated both school internet and the 96% platform adoption on slides 2 and 6;
+v1 repeated internet only. v2 also omitted the explicit points unit after +3.4
+and used a less specific title-slide heading. This single sample does not show
+v2 superiority or establish relative latency/cost. v1 remains the default.
+The legacy v1 result has no recorded prompt hash; model aliases can change.
+
+A substantive v1 revision of that saved document succeeded in 8.44 s:
+slide 4 changed from bullets to a text paragraph under 450 characters while
+retaining the rural subject shortages, age >49 and 46 Zemsky Teacher recruits.
+The input object, document title, ordered IDs, count and every unselected slide
+were checked for exact preservation. Content was also read manually.
+
+The resulting document was loaded into the running frontend through intercepted
+synthetic read responses, then exported using the existing download dialog.
+This export check made no ML calls and did not exercise backend job publication.
+The eight-slide editable PPTX opened and converted to PDF in LibreOffice;
+all eight rendered pages were visually reviewed with no obvious clipping.
+At this checkpoint PowerPoint-specific behavior and a fresh full user-path timing
+were unverified; see the later end-to-end result below.
+
+One earlier v2 attempt failed after 83.23 s with ConnectError / SSLEOFError.
+Subsequent unauthenticated TLS probes and an SDK get_models call (0.78 s)
+succeeded with the current credential/certificate. The later generation also
+succeeded, but the intermittent connection failure has no established root cause.
+TLS stays enabled; there are no automatic paid retries.
+
+The user explicitly deferred real reports for this session. Five-real-report
+semantic acceptance remains outstanding; synthetic checks are not production
+acceptance. Saved outputs and local handoff notes stay outside committed files.
+
+## Revision protocol and latest acceptance
+
+The former bare-document/unsupported root union failed a live delete command:
+the candidate deleted or moved a slide. Validation protected the stored document
+but classified it as INVALID_ML_RESPONSE. Revision-wire-v2 adds mandatory root
+status/document fields and exact snapshot count constraints. That alone did not
+make the model reliably refuse structure changes. `capabilities.py` therefore
+refuses explicit Russian/English slide add/delete/move imperatives before calling
+the provider. Tested negated/quoted phrases and slide-title/body content edits
+still reach the model. This is a conservative fast path, not a general language
+classifier. Unknown formulations still depend on model interpretation and strict
+result invariants; no universal unsupported-command detection is claimed.
+
+A fresh real browser path with v1 content prompts and revision-wire-v2 passed
+registration, generation, substantive paragraph revision, and export in 24.38 s.
+It produced nine slides. IDs, order, count, document title and every unselected
+slide were compared exactly. A separate API job for deleting slide 4 failed with
+ML_CAPABILITY_UNAVAILABLE and preserved the stored document and token. It did
+not invoke the provider. The nine exported slides were rendered in LibreOffice
+and visually reviewed; no obvious clipping was found. However, manual content
+review found an invented feedback-collection action in the generated v1 deck.
+The successful transport path is not a semantic acceptance result.
+
+### Experimental v3 (opt in)
+
+Set `PM_ML_PROMPT_VERSION=v3` on the worker to opt in and recreate the worker.
+v1 remains the default; v2 and v3 are experimental. v3 builds on v2 instructions
+and adds `prompt_templates/v3-generate.txt`. For source text shorter than 1000
+Python Unicode code points, its target is min(requested slideCount, 4), including
+title/closing. The limit is sent in the payload and schema and checked after
+normalization. An over-budget candidate is rejected, never truncated or retried.
+This heuristic can compress unusually information-dense short texts, so review
+fidelity rather than assuming length alone establishes quality.
+
+On the exact 404-character synthetic source that exposed v1's invented feedback
+action, v3 plus the short-source budget returned four slides in 4.71 s. Manual
+review retained 12 students, 5 interviews, 3 prototypes, 8/12 self-report and its
+non-causal caveat, input/reminder problems, the four-week plans and unknown
+funding. The invented action and earlier repetitions were absent. A substantive
+v3 revision changed slide 2 from bullets to a paragraph in 5.21 s, preserving
+all invariants and facts (8/12 was written in words). The four-slide result was
+exported through the real frontend using saved synthetic responses, opened in
+LibreOffice and visually reviewed without obvious clipping.
+
+A longer year-results v3 check returned eight slides in 9.74 s with numeric
+anchors and >49 preserved and no duplicate internet/platform facts. It shortened
+some qualifiers (e.g. compensation for young specialists became compensation
+without the beneficiary qualifier). This limits semantic acceptance and is why
+v3 is not promoted as a generally superior default. The initial prompt-only v3
+attempt returned seven slides, motivating the code-enforced short-source budget.
+The generation-policy identifier in acceptance metadata prevents silently reusing
+that older result under the changed policy.
+
+Latest targeted offline checks: 57 passed; Ruff passed. Independent focused review
+found two issues (final count after normalization and English content-command
+false refusals); both were reproduced and fixed with tests. Tests make no paid
+calls. SDK connection failures remain intermittent with no established root cause.
+Five-real-report acceptance is explicitly deferred by the user. Microsoft
+PowerPoint-specific rendering and production deployment remain separate gates.

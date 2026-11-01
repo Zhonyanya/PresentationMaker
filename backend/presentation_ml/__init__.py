@@ -5,7 +5,8 @@ from datetime import UTC, datetime
 
 from app.presentations.schemas import Document, normalize_document, validate_revision
 
-from .prompts import build_prompt
+from .capabilities import reject_explicit_structure_change
+from .prompts import build_prompt, build_revision_prompt, get_prompt_version
 from .transport import request_document
 
 PRESERVES_SLIDE_IDS = True
@@ -22,7 +23,7 @@ def remaining_seconds(deadline):
     return remaining - 10
 
 
-def _schema(revision=False):
+def _schema(revision=False, slide_count=None):
     schema = Document.model_json_schema()
     # Optional fields must be omitted, never returned as null.
     def clean(node):
@@ -42,14 +43,20 @@ def _schema(revision=False):
                 clean(child)
     clean(schema)
     if revision:
+        if slide_count is not None:
+            schema["properties"]["slides"].update(minItems=slide_count, maxItems=slide_count)
         for definition in schema.get("$defs", {}).values():
             if "layout" in definition.get("properties", {}):
                 definition.setdefault("required", []).append("id")
         definitions = schema.pop("$defs", {})
-        schema = {"$defs": definitions, "anyOf": [schema, {
-            "type": "object", "properties": {"unsupported": {"const": True}},
-            "required": ["unsupported"], "additionalProperties": False,
-        }]}
+        schema = {
+            "$defs": definitions, "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["applied", "unsupported"]},
+                "document": {"anyOf": [schema, {"type": "null"}]},
+            },
+            "required": ["status", "document"], "additionalProperties": False,
+        }
     else:
         for definition in schema.get("$defs", {}).values():
             definition.get("properties", {}).pop("id", None)
@@ -69,15 +76,23 @@ def _normalize(result, generation):
 
 def generate(*, text, slideCount, job_id, deadline, title=None):
     timeout = remaining_seconds(deadline)
-    payload = {"operation": "generate", "text": text, "slideCount": slideCount}
+    short_budget = get_prompt_version() == 'v3' and len(text) < 1000
+    target_count = min(slideCount, 4) if short_budget else slideCount
+    schema = _schema()
+    if short_budget:
+        schema['properties']['slides']['maxItems'] = target_count
+    payload = {"operation": "generate", "text": text, "slideCount": target_count}
     if title is not None:
         payload["title"] = title
     result = request_document(
         system=build_prompt('generate'),
-        payload=payload, schema=_schema(), timeout=timeout,
+        payload=payload, schema=schema, timeout=timeout,
     )
     remaining_seconds(deadline)
-    return _normalize(result, True)
+    normalized = _normalize(result, True)
+    if short_budget and len(normalized['slides']) > target_count:
+        raise ValueError('Generated document exceeds short-source budget')
+    return normalized
 
 
 def revise(*, document, text, slideCount, instruction, target_slide_numbers,
@@ -93,18 +108,24 @@ def revise(*, document, text, slideCount, instruction, target_slide_numbers,
                        for n in target_slide_numbers)
                 or [ids[n - 1] for n in target_slide_numbers] != target_slide_ids):
             raise ValueError("Invalid revision targets")
+    reject_explicit_structure_change(instruction)
     result = request_document(
-        system=build_prompt('revise'),
+        system=build_revision_prompt(),
         payload={"operation": "revise", "document": original, "text": text,
                  "slideCount": slideCount, "instruction": instruction,
                  "target_slide_numbers": target_slide_numbers,
                  "target_slide_ids": target_slide_ids},
-        schema=_schema(revision=True), timeout=timeout,
+        schema=_schema(revision=True, slide_count=len(ids)), timeout=timeout,
     )
     remaining_seconds(deadline)
-    if isinstance(result, dict) and result.get("unsupported") is True:
+    if (not isinstance(result, dict) or set(result) != {"status", "document"}
+            or result["status"] not in ("applied", "unsupported")):
+        raise ValueError("Invalid revision response envelope")
+    if result["status"] == "unsupported":
+        if result["document"] is not None:
+            raise ValueError("Unsupported revision must not contain a document")
         raise NotImplementedError("Unsupported presentation operation")
-    current = _normalize(result, False)
+    current = _normalize(result["document"], False)
     if [s["id"] for s in current["slides"]] != ids:
         raise ValueError("Revision changed slide identities or order")
     if target_slide_ids is not None:

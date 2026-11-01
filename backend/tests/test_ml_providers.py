@@ -59,3 +59,23 @@ def test_unknown_prompt_version_is_rejected(monkeypatch):
     monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'unknown')
     with pytest.raises(ValueError, match='prompt version'):
         build_prompt('generate')
+
+
+def test_revision_wire_prompt_separately_versions_internal_protocol():
+    from presentation_ml.prompts import REVISION_WIRE_VERSION, build_revision_prompt
+
+    assert REVISION_WIRE_VERSION == 'v2'
+    prompt = build_revision_prompt()
+    assert '{"unsupported":true}' not in prompt
+    assert '"status":"unsupported","document":null' in prompt
+    assert '"status":"applied"' in prompt
+
+
+def test_prompt_v3_limits_short_sources_without_invented_followups(monkeypatch):
+    from presentation_ml.prompts import build_prompt
+
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v3')
+    generated = build_prompt('generate')
+    assert '1000' in generated and '4 слайда' in generated
+    assert 'обратную связь' in generated
+    assert 'document.title' in build_prompt('revise')
