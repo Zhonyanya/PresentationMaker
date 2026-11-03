@@ -4,7 +4,7 @@ import { safeStorage } from '@/lib/storage'
 import { env } from '@/config/env'
 
 /** Ключи, которые приложение хранит в браузере: черновики демо-режима и ссылки на документы */
-const STORED_PREFIXES = ['ai-presentations:', 'pm:current:']
+const STORED_PREFIXES = ['ai-presentations:', 'pm:current:', 'pm:job:']
 
 function resetStoredDrafts() {
   try {

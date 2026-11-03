@@ -334,9 +334,11 @@ interface RevisionPanelProps {
   onTargets: (value: string) => void
   onRevise: () => void
   onRegenerate: () => void
+  /** Исходный текст ещё в форме; после перезагрузки страницы его нет — он не хранится в браузере */
+  sourceKept: boolean
 }
 
-function RevisionPanel({ index, locked, busy, instruction, targets, status, onInstruction, onTargets, onRevise, onRegenerate }: RevisionPanelProps) {
+function RevisionPanel({ index, locked, busy, instruction, targets, status, onInstruction, onTargets, onRevise, onRegenerate, sourceKept }: RevisionPanelProps) {
   const disabled = busy || locked
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -402,7 +404,10 @@ function RevisionPanel({ index, locked, busy, instruction, targets, status, onIn
         <div className="flex flex-col gap-3 border-t border-border pt-6">
           <h3 className="eyebrow">Начать заново</h3>
           <p className="text-[13px] leading-relaxed text-muted-foreground">
-            Полная перегенерация вернёт к форме: проверьте исходный текст и создайте новый вариант. Текущий документ останется, пока новый не будет готов.
+            {sourceKept
+              ? 'Полная перегенерация вернёт к форме: проверьте исходный текст и создайте новый вариант.'
+              : 'Полная перегенерация вернёт к форме: вставьте исходный текст заново — он не хранится в браузере — и создайте новый вариант.'}{' '}
+            Текущий документ останется, пока новый не будет готов.
           </p>
           <Button variant="outline" onClick={onRegenerate} disabled={locked} className="self-start">
             <RotateCcw aria-hidden />

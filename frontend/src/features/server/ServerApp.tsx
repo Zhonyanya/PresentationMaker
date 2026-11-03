@@ -26,11 +26,32 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** Poll failures worth retrying: the job keeps running on the server meanwhile. */
 const TRANSIENT = new Set(['network', 'timeout', 'server', 'rate_limited'])
 const POLL_RETRIES = 5
+/** Ошибки, после которых имеет смысл перечитать документ с сервера */
+const REFRESHABLE = new Set(['conflict', 'network', 'timeout', 'server', 'invalid_response'])
 
 /** crypto.randomUUID exists only in secure contexts (HTTPS/localhost); getRandomValues works everywhere. */
 function randomKey(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** Start time and kind of a running job: survive a reload so the timer and completion toast stay right. */
+const jobMetaKey = (jobId: string) => `pm:job:${jobId}`
+function saveJobMeta(jobId: string, kind: JobKind, startedAt: number) {
+  safeStorage.setItem(jobMetaKey(jobId), JSON.stringify({ kind, startedAt }))
+}
+async function readJobMeta(jobId: string): Promise<{ kind: JobKind; startedAt: number | null }> {
+  try {
+    const raw = await safeStorage.getItem(jobMetaKey(jobId))
+    const meta: unknown = raw ? JSON.parse(raw) : null
+    const { kind, startedAt } = (meta ?? {}) as { kind?: unknown; startedAt?: unknown }
+    return {
+      kind: kind === 'generate' || kind === 'revise' ? kind : null,
+      startedAt: typeof startedAt === 'number' && startedAt <= Date.now() ? startedAt : null,
+    }
+  } catch {
+    return { kind: null, startedAt: null }
+  }
 }
 
 /** Only references are persisted, never source text, commands, passwords or documents. */
@@ -62,6 +83,9 @@ function Workspace() {
   const [jobStartedAt, setJobStartedAt] = useState<number | null>(null)
   const [ready, setReady] = useState<number | null>(null)
   const [library, setLibrary] = useState<LibraryItem[]>([])
+  // Кнопка «Обновить документ» уместна, только если документ мог измениться на сервере
+  const [errorCanRefresh, setErrorCanRefresh] = useState(false)
+  const draftText = useFlowStore((s) => s.draft.text)
   // Документ, для которого пояснение о числе слайдов уже закрыто
   const [shortfallSeen, setShortfallSeen] = useState<string | null>(null)
   const jobKindRef = useRef<JobKind>(null)
@@ -116,7 +140,9 @@ function Workspace() {
       // Server active_job is authoritative; completed jobs need no resumed polling.
       setJob(value.active_job)
       setWaiting(Boolean(value.active_job))
-      setJobKind(null); setJobStartedAt(value.active_job ? Date.now() : null)
+      const meta = value.active_job ? await readJobMeta(value.active_job.job_id) : { kind: null, startedAt: null }
+      if (activeEpoch !== epoch.current) return
+      setJobKind(meta.kind); setJobStartedAt(value.active_job ? meta.startedAt ?? Date.now() : null)
       setEditor(Boolean(value.document))
       saveReference(account, value.presentation_id, value.active_job)
     } catch (cause) {
@@ -204,6 +230,7 @@ function Workspace() {
         saveReference(user, value.presentation_id, value.active_job)
         const kind = jobKindRef.current
         setJobKind(null)
+        safeStorage.removeItem(jobMetaKey(jobId))
         if (status.status === 'succeeded' && paused) {
           // Пользователь ушёл к форме: не перебрасываем его, а предлагаем открыть результат
           setInstruction('')
@@ -221,7 +248,7 @@ function Workspace() {
           setEditor(Boolean(value.document))
           setInstruction('')
           setError(status.output_document_token !== value.document_token ? 'Документ уже обновлён другой задачей. Показан текущий результат, не архив.' : '')
-        } else setError(jobErrorMessage(status.error))
+        } else { setError(jobErrorMessage(status.error)); setErrorCanRefresh(status.error?.code !== 'ML_CAPABILITY_UNAVAILABLE') }
       } catch (cause) {
         if (controller.signal.aborted || activeEpoch !== epoch.current) return
         const error = toApiError(cause)
@@ -232,6 +259,7 @@ function Workspace() {
           return
         }
         setError(`${error.message} Остановка ожидания не отменяет задание.`)
+        setErrorCanRefresh(true)
         setWaiting(false)
       }
     }
@@ -300,13 +328,17 @@ function Workspace() {
       if (activeEpoch !== epoch.current) return
       submission.current = null
       setJob(accepted); setWaiting(true); setPhase('waiting')
-      setJobKind(operation); setJobStartedAt(Date.now())
+      const startedAt = Date.now()
+      setJobKind(operation); setJobStartedAt(startedAt)
+      saveJobMeta(accepted.job_id, operation, startedAt)
       saveReference(user, accepted.presentation_id, accepted)
       // Polling loads the document after completion. An eager GET here could
       // arrive late with document: null and overwrite the successful result.
     } catch (cause) {
       if (activeEpoch !== epoch.current) return
-      setError(cause instanceof Error && cause.name === 'Error' ? cause.message : toApiError(cause).message)
+      const apiError = cause instanceof Error && cause.name === 'Error' ? null : toApiError(cause)
+      setError(apiError ? apiError.message : (cause as Error).message)
+      setErrorCanRefresh(Boolean(apiError && REFRESHABLE.has(apiError.code)))
     } finally { if (activeEpoch === epoch.current) setBusy(false) }
   }
 
@@ -347,8 +379,9 @@ function Workspace() {
     try {
       const value = await api.current(id)
       if (activeEpoch !== epoch.current) return
-      applyCurrent(value); setJob(value.active_job); setWaiting(Boolean(value.active_job)); setJobKind(null)
-      setJobStartedAt(value.active_job ? Date.now() : null)
+      applyCurrent(value); setJob(value.active_job); setWaiting(Boolean(value.active_job))
+      const meta = value.active_job ? await readJobMeta(value.active_job.job_id) : { kind: null, startedAt: null }
+      setJobKind(meta.kind); setJobStartedAt(value.active_job ? meta.startedAt ?? Date.now() : null)
       setEditor(Boolean(value.document)); setInstruction(''); setTargets(''); submission.current = null
       saveReference(user, value.presentation_id, value.active_job)
     } catch (cause) {
@@ -385,7 +418,7 @@ function Workspace() {
     <Notice
       message={error}
       onDismiss={() => setError('')}
-      action={current && <Button variant="link" size="sm" className="h-auto shrink-0 text-destructive" onClick={() => void refresh()}>Обновить документ</Button>}
+      action={current && errorCanRefresh && <Button variant="link" size="sm" className="h-auto shrink-0 text-destructive" onClick={() => void refresh()}>Обновить документ</Button>}
     />
   ) : null
 
@@ -417,6 +450,7 @@ function Workspace() {
         onTargets={setTargets}
         onRevise={() => void launch('revise')}
         onRegenerate={leaveWaiting}
+        sourceKept={Boolean(draftText.trim())}
       />
     )
   } else if (job && waiting) {
