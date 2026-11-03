@@ -328,7 +328,7 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
               <h2 id="params-heading" className="sr-only">
                 Объём
               </h2>
-              <SlideCountField value={draft.slideCount} onChange={(slideCount) => setDraft({ slideCount })} />
+              <SlideCountField value={draft.slideCount} onChange={(slideCount) => setDraft({ slideCount })} shortTextNote={serverMode} />
             </motion.section>
 
             <motion.section variants={fadeUp} ref={examplesRef} className="flex flex-col gap-4" aria-labelledby="examples-heading">

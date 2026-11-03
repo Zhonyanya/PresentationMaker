@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
-import { ArrowRight, LoaderCircle, LogOut, Plus, RotateCcw, TriangleAlert, X } from 'lucide-react'
+import { ArrowRight, Info, LoaderCircle, LogOut, Plus, RotateCcw, TriangleAlert, X } from 'lucide-react'
 import type { JobStatus, LibraryItem } from '@/api/server-api'
 import type { Presentation, Slide } from '@/domain/presentation'
 import type { SlideScene } from '@/layouts/scene'
@@ -98,6 +98,24 @@ export function Notice({ message, onDismiss, action }: { message: string; onDism
         <X className="size-4" />
       </button>
     </motion.div>
+  )
+}
+
+/** Пояснение без тревоги: результат корректен, но может удивить (например, слайдов меньше запрошенного) */
+export function InfoNote({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  return (
+    <div role="status" className="flex items-start gap-3 border-l-2 border-foreground/40 bg-card px-4 py-3 text-[14px] text-foreground/85">
+      <Info className="mt-[3px] size-4 shrink-0 text-muted-foreground" aria-hidden />
+      <p className="flex-1 leading-snug">{message}</p>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Скрыть пояснение"
+        className="-m-1 rounded p-1 text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-foreground"
+      >
+        <X className="size-4" />
+      </button>
+    </div>
   )
 }
 
@@ -332,7 +350,8 @@ function RevisionPanel({ index, locked, busy, instruction, targets, status, onIn
       <div className="flex flex-col gap-7 p-5">
         {status}
         <p className="text-[13.5px] leading-relaxed text-muted-foreground">
-          Опишите словами, что поменять, — ML-модуль перепишет слайды. Число, порядок и ID слайдов сохранятся.
+          Опишите, что поменять в тексте или макете, — ML-модуль перепишет слайды. Добавлять, удалять и переставлять слайды
+          командой нельзя: их число и порядок сохранятся.
         </p>
         <form className="flex flex-col gap-5" onSubmit={submit}>
           <div className="flex flex-col gap-2">
@@ -345,7 +364,7 @@ function RevisionPanel({ index, locked, busy, instruction, targets, status, onIn
               value={instruction}
               onChange={(e) => onInstruction(e.target.value)}
               disabled={disabled}
-              placeholder="Например: сократи пункты до одной строки и добавь вывод"
+              placeholder="Например: сократи пункты до одной строки"
               className="min-h-32 text-[14.5px]"
             />
           </div>

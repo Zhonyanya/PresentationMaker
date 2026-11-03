@@ -11,7 +11,8 @@ import { usePresentationScenes } from '@/hooks/usePresentationScenes'
 import { CreatePage } from '@/features/create/CreatePage'
 import { ReadyCurtain } from '@/features/generation/ReadyCurtain'
 import { AuthScreen, SessionCheck, type AuthKind } from './AuthScreen'
-import { AccountControls, JobWaiting, Library, Notice, PausedJob, ServerEditor, type JobKind } from './ServerWorkspace'
+import { AccountControls, InfoNote, JobWaiting, Library, Notice, PausedJob, ServerEditor, type JobKind } from './ServerWorkspace'
+import { jobErrorMessage, slideShortfall } from './job-messages'
 import { useMlStub } from '@/components/app/ModeBadges'
 import { Button } from '@/components/ui/button'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -61,6 +62,8 @@ function Workspace() {
   const [jobStartedAt, setJobStartedAt] = useState<number | null>(null)
   const [ready, setReady] = useState<number | null>(null)
   const [library, setLibrary] = useState<LibraryItem[]>([])
+  // Документ, для которого пояснение о числе слайдов уже закрыто
+  const [shortfallSeen, setShortfallSeen] = useState<string | null>(null)
   const jobKindRef = useRef<JobKind>(null)
   const editorRef = useRef(false)
   const waitingRef = useRef(false)
@@ -218,7 +221,7 @@ function Workspace() {
           setEditor(Boolean(value.document))
           setInstruction('')
           setError(status.output_document_token !== value.document_token ? 'Документ уже обновлён другой задачей. Показан текущий результат, не архив.' : '')
-        } else setError(status.error?.message ?? 'Задание завершилось с ошибкой. Предыдущий документ сохранён.')
+        } else setError(jobErrorMessage(status.error))
       } catch (cause) {
         if (controller.signal.aborted || activeEpoch !== epoch.current) return
         const error = toApiError(cause)
@@ -386,6 +389,12 @@ function Workspace() {
     />
   ) : null
 
+  const shortfall = slideShortfall(current)
+  const shortfallKey = current ? `${current.presentation_id}:${current.document_token}` : null
+  const shortfallNote = shortfall && shortfallKey !== shortfallSeen
+    ? <InfoNote message={shortfall} onDismiss={() => setShortfallSeen(shortfallKey)} />
+    : null
+
   let screen
   if (editor && document && selected) {
     screen = (
@@ -395,7 +404,7 @@ function Workspace() {
         selected={document.slides[selectedIndex] ?? selected}
         selectedIndex={selectedIndex}
         account={account}
-        notice={notice}
+        notice={notice || shortfallNote ? <div className="flex flex-col gap-2">{notice}{shortfallNote}</div> : undefined}
         job={job ? { phase, waiting, onLeave: leaveWaiting, onResume: resumeWaiting } : null}
         exportOpen={exportOpen}
         onExportOpenChange={setExportOpen}
