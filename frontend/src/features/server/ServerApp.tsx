@@ -12,7 +12,7 @@ import { CreatePage } from '@/features/create/CreatePage'
 import { ReadyCurtain } from '@/features/generation/ReadyCurtain'
 import { AuthScreen, SessionCheck, type AuthKind } from './AuthScreen'
 import { AccountControls, InfoNote, JobWaiting, Library, Notice, PausedJob, ServerEditor, type JobKind } from './ServerWorkspace'
-import { jobErrorMessage, slideShortfall } from './job-messages'
+import { jobFailure, pollFailure, slideShortfall } from './job-messages'
 import { useMlStub } from '@/components/app/ModeBadges'
 import { Button } from '@/components/ui/button'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -23,8 +23,6 @@ const api = createServerApi({ baseUrl: env.apiBaseUrl })
 const referenceKey = (user: ServerUser) => `pm:current:${user.id}`
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** Poll failures worth retrying: the job keeps running on the server meanwhile. */
-const TRANSIENT = new Set(['network', 'timeout', 'server', 'rate_limited'])
 const POLL_RETRIES = 5
 /** Ошибки, после которых имеет смысл перечитать документ с сервера */
 const REFRESHABLE = new Set(['conflict', 'network', 'timeout', 'server', 'invalid_response'])
@@ -51,6 +49,16 @@ async function readJobMeta(jobId: string): Promise<{ kind: JobKind; startedAt: n
     }
   } catch {
     return { kind: null, startedAt: null }
+  }
+}
+/** При выходе и удалении аккаунта в браузере не остаётся сведений о прежних заданиях. */
+function forgetJobMeta() {
+  try {
+    for (const key of Object.keys(globalThis.localStorage ?? {})) {
+      if (key.startsWith('pm:job:')) safeStorage.removeItem(key)
+    }
+  } catch {
+    /* хранилище недоступно — удалять нечего */
   }
 }
 
@@ -83,6 +91,7 @@ function Workspace() {
   const [jobStartedAt, setJobStartedAt] = useState<number | null>(null)
   const [ready, setReady] = useState<number | null>(null)
   const [library, setLibrary] = useState<LibraryItem[]>([])
+  const [libraryFailed, setLibraryFailed] = useState(false)
   // Кнопка «Обновить документ» уместна, только если документ мог измениться на сервере
   const [errorCanRefresh, setErrorCanRefresh] = useState(false)
   const draftText = useFlowStore((s) => s.draft.text)
@@ -248,17 +257,30 @@ function Workspace() {
           setEditor(Boolean(value.document))
           setInstruction('')
           setError(status.output_document_token !== value.document_token ? 'Документ уже обновлён другой задачей. Показан текущий результат, не архив.' : '')
-        } else { setError(jobErrorMessage(status.error)); setErrorCanRefresh(status.error?.code !== 'ML_CAPABILITY_UNAVAILABLE') }
+        } else {
+          const failure = jobFailure(status.error, kind)
+          setError(failure.message); setErrorCanRefresh(failure.canRefresh)
+        }
       } catch (cause) {
         if (controller.signal.aborted || activeEpoch !== epoch.current) return
         const error = toApiError(cause)
+        const action = pollFailure(error.code, failures, POLL_RETRIES)
         // Разовый сбой сети или прокси не повод бросать ожидание: повторяем с растущей паузой
-        if (TRANSIENT.has(error.code) && failures < POLL_RETRIES) {
+        if (action === 'retry') {
           failures++
           later(Math.min(2500 * 2 ** failures, 30000))
           return
         }
-        setError(`${error.message} Остановка ожидания не отменяет задание.`)
+        if (action === 'drop') {
+          // Статус этого задания больше не получить: перестаём его отслеживать,
+          // актуальное состояние покажет «Обновить документ»
+          safeStorage.removeItem(jobMetaKey(jobId))
+          setJob(null); setJobKind(null)
+          saveReference(user, jobPresentationId, null)
+          setError(`Не удалось узнать, чем закончилось задание: ${error.message}`)
+        } else {
+          setError(`${error.message} Остановка ожидания не отменяет задание.`)
+        }
         setErrorCanRefresh(true)
         setWaiting(false)
       }
@@ -269,16 +291,17 @@ function Workspace() {
 
   const refreshLibrary = useCallback(async () => {
     try {
-      setLibrary(await api.list())
+      setLibrary(await api.list()); setLibraryFailed(false)
     } catch {
-      /* Список вторичен: ошибка сети не должна заслонять основной сценарий */
+      // Список вторичен: не заслоняем основной сценарий общей ошибкой, но и не выдаём сбой за пустой список
+      setLibraryFailed(true)
     }
   }, [])
   // Обновляем после входа, завершения задания и смены документа
   const documentToken = current?.document_token
   useEffect(() => {
     if (user) void refreshLibrary()
-    else setLibrary([])
+    else { setLibrary([]); setLibraryFailed(false) }
   }, [user, jobId, documentToken, refreshLibrary])
 
   const authenticate = async (event: FormEvent) => {
@@ -301,6 +324,7 @@ function Workspace() {
       await api.logout()
       // На общем компьютере следующий человек не должен видеть ссылку на чужую работу
       if (userRef.current) safeStorage.removeItem(referenceKey(userRef.current))
+      forgetJobMeta()
       clearPrivate()
       safeStorage.setItem('pm:auth-change', randomKey())
     } catch (cause) { setError(toApiError(cause).message) }
@@ -404,6 +428,7 @@ function Workspace() {
     try {
       await api.deleteAccount(accountPassword)
       safeStorage.removeItem(referenceKey(user))
+      forgetJobMeta()
       clearPrivate()
       safeStorage.setItem('pm:auth-change', randomKey())
       toast.success('Аккаунт и все данные удалены')
@@ -464,7 +489,7 @@ function Workspace() {
         notice={<>
           {notice}
           {job && <PausedJob phase={phase} onResume={resumeWaiting} />}
-          <Library items={library} currentId={current?.presentation_id ?? null} busy={busy || Boolean(job)}
+          <Library items={library} failed={libraryFailed} onRetry={() => void refreshLibrary()} currentId={current?.presentation_id ?? null} busy={busy || Boolean(job)}
             onOpen={(id) => void openPresentation(id)} onDelete={(id) => void deletePresentation(id)} onDeleteAccount={deleteAccount} />
         </>}
         onGenerate={(body) => void launch('generate', body)}

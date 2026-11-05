@@ -6,12 +6,19 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 
 let adapterRequest: Promise<string | null> | null = null
 
-/** Какой ML подключён к серверу — один запрос на всё приложение. */
+/**
+ * Какой ML подключён к серверу — один запрос на всё приложение. Неудачный ответ
+ * не запоминается: иначе разовый сбой навсегда скрыл бы пометку о заглушке.
+ */
 function fetchMlAdapter(): Promise<string | null> {
   adapterRequest ??= fetch(`${env.apiBaseUrl}/api/v1/health/ready`, { credentials: 'include', cache: 'no-store' })
     .then((response) => (response.ok ? response.json() : null))
     .then((body: { ml_adapter?: unknown } | null) => (typeof body?.ml_adapter === 'string' ? body.ml_adapter : null))
     .catch(() => null)
+    .then((adapter) => {
+      if (adapter === null) adapterRequest = null
+      return adapter
+    })
   return adapterRequest
 }
 

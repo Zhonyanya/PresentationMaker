@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { EASE_OUT_EXPO } from '@/components/app/motion'
 
-/** @param shortTextNote Серверный режим: ML не досочиняет, поэтому короткий текст даёт меньше слайдов */
+/** @param shortTextNote Серверный режим: при коротком тексте ML-модуль может вернуть меньше слайдов */
 export function SlideCountField({ value, onChange, shortTextNote = false }: { value: number; onChange: (value: number) => void; shortTextNote?: boolean }) {
   const set = (next: number) => onChange(Math.min(Math.max(next, LIMITS.slideCountMin), LIMITS.slideCountMax))
   return (
@@ -52,7 +52,7 @@ export function SlideCountField({ value, onChange, shortTextNote = false }: { va
       />
       <p className="text-[13px] leading-relaxed text-muted-foreground">
         Примерно, вместе с титульным и заключительным. Итог зависит от структуры текста.
-        {shortTextNote && ' Если текст короткий, слайдов будет меньше: содержание, которого нет в докладе, не досочиняется.'}
+        {shortTextNote && ' Если текст короткий, слайдов может получиться меньше: презентация строится только по содержанию доклада.'}
       </p>
     </div>
   )

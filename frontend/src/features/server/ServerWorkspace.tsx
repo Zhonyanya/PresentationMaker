@@ -550,8 +550,11 @@ function AccountDeletion({ busy, onDeleteAccount }: { busy: boolean; onDeleteAcc
 }
 
 /** Список своих презентаций с удалением — пользователь управляет своими данными */
-export function Library({ items, currentId, busy, onOpen, onDelete, onDeleteAccount }: {
+export function Library({ items, failed = false, onRetry, currentId, busy, onOpen, onDelete, onDeleteAccount }: {
   items: LibraryItem[]
+  /** Последняя загрузка списка не удалась: показанное может быть неполным */
+  failed?: boolean
+  onRetry?: () => void
   currentId: string | null
   busy: boolean
   onOpen: (id: string) => void
@@ -566,6 +569,16 @@ export function Library({ items, currentId, busy, onOpen, onDelete, onDeleteAcco
         </h2>
         <span className="text-[12.5px] text-muted-foreground">Хранятся на сервере, пока вы их не удалите</span>
       </div>
+      {failed && (
+        <p role="status" className="flex flex-wrap items-baseline gap-x-2 text-[13.5px] text-destructive">
+          Не удалось загрузить список презентаций.
+          {onRetry && (
+            <Button variant="link" size="sm" className="h-auto p-0 text-destructive" onClick={onRetry}>
+              Повторить
+            </Button>
+          )}
+        </p>
+      )}
       {items.length ? (
         <ul className="scroll-thin max-h-[320px] overflow-auto">
           {items.map((item) => (
@@ -579,7 +592,7 @@ export function Library({ items, currentId, busy, onOpen, onDelete, onDeleteAcco
             />
           ))}
         </ul>
-      ) : (
+      ) : failed ? null : (
         <p className="text-[13.5px] text-muted-foreground">Пока пусто — созданные презентации появятся здесь.</p>
       )}
       <AccountDeletion busy={busy} onDeleteAccount={onDeleteAccount} />
