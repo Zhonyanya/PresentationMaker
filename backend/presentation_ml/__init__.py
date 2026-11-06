@@ -2,6 +2,7 @@
 
 import copy
 from datetime import UTC, datetime
+from functools import lru_cache
 
 from app.presentations.schemas import Document, normalize_document, validate_revision
 
@@ -154,6 +155,55 @@ def _pack_short_generation(document, target_count):
                                             document['slides'][-1]]), True)
 
 
+def _fit_generation_budget(document, target_count):
+    """Fit an ordered partition of content without losing text or boundary slots."""
+    document = copy.deepcopy(document)
+    slides = document['slides']
+    if len(slides) <= target_count:
+        return document
+    content = slides[1:-1]
+
+    @lru_cache(maxsize=None)
+    def group(start, stop):
+        if stop == start + 1:
+            return content[start], 0
+        parts = content[start:stop]
+        body = '\n\n'.join(_slide_text(slide) for slide in parts)
+        notes = '\n\n'.join(slide['notes'] for slide in parts if slide.get('notes'))
+        body_length = len(body.encode('utf-16-le')) // 2
+        if body_length > 800 or len(notes.encode('utf-16-le')) // 2 > 10_000:
+            return None
+        merged = {'id': parts[0]['id'], 'layout': 'text',
+                  'title': parts[0]['title'], 'body': body}
+        if notes:
+            merged['notes'] = notes
+        return merged, body_length ** 2
+
+    @lru_cache(maxsize=None)
+    def partition(start, slots):
+        if slots == 0:
+            return (0, ()) if start == len(content) else None
+        best = None
+        for stop in range(start + 1, len(content) - slots + 2):
+            candidate = group(start, stop)
+            if candidate is None:
+                # Larger adjacent groups can only add text and notes.
+                break
+            tail = partition(stop, slots - 1)
+            if tail is None:
+                continue
+            score = candidate[1] + tail[0]
+            if best is None or score < best[0]:
+                best = score, ((start, stop), *tail[1])
+        return best
+
+    chosen = partition(0, target_count - 2)
+    if chosen is None:
+        raise ValueError('Generated document exceeds readable slide budget')
+    document['slides'] = [slides[0], *(group(a, b)[0] for a, b in chosen[1]), slides[-1]]
+    return document
+
+
 def generate(*, text, slideCount, job_id, deadline, title=None):
     timeout = remaining_seconds(deadline)
     version = get_prompt_version()
@@ -184,6 +234,8 @@ def generate(*, text, slideCount, job_id, deadline, title=None):
     normalized = _join_generation_headings(_normalize(result, True))
     if short_budget:
         normalized = _pack_short_generation(normalized, target_count)
+    else:
+        normalized = _fit_generation_budget(normalized, target_count)
     # Structural normalization may have inserted missing boundary slides.
     # Reject overflow instead of silently publishing N+1 or discarding content.
     if len(normalized['slides']) > target_count:

@@ -67,7 +67,7 @@ def test_long_generation_budget_includes_cover_and_closing(monkeypatch, ml, inpu
 def test_long_generation_rejects_final_overflow_without_truncation_or_retry(
     monkeypatch, ml, inputs, missing_boundaries,
 ):
-    slides = [{'layout': 'text', 'title': f'Result {i}', 'body': f'Fact {i}'}
+    slides = [{'layout': 'text', 'title': f'Result {i}', 'body': f'Fact {i}. ' * 150}
               for i in range(6)]
     if not missing_boundaries:
         slides = [{'layout': 'title', 'title': 'Pilot'}, *slides,
@@ -79,6 +79,34 @@ def test_long_generation_rejects_final_overflow_without_truncation_or_retry(
         ml.generate(**dict(inputs, text='Source material. ' * 100, slideCount=7))
     assert len(calls) == 1
     assert candidate == original
+
+
+def test_generation_fits_missing_closing_without_losing_visible_text_or_notes(
+    monkeypatch, ml, inputs,
+):
+    candidate = {'title': 'Pilot results', 'slides': [
+        {'layout': 'title', 'title': 'Pilot results'},
+        {'layout': 'section', 'title': 'Scope', 'subtitle': 'One canteen; four weeks.',
+         'notes': 'No control group.'},
+        *[{'layout': 'bullets', 'title': f'Result {i}',
+           'bullets': [f'{i} measurements', 'Budget not approved'], 'notes': f'Detail {i}'}
+          for i in range(1, 6)],
+    ]}
+    original = copy.deepcopy(candidate)
+    calls = provider(monkeypatch, ml, candidate)
+    result = ml.generate(**dict(inputs, text='Source material. ' * 100, slideCount=7))
+    assert len(result['slides']) == 7
+    assert result['slides'][0]['layout'] == 'title'
+    assert result['slides'][-1]['layout'] == 'closing'
+    visible = '\n'.join(ml._slide_text(s) for s in result['slides'])
+    notes = '\n'.join(s.get('notes', '') for s in result['slides'])
+    for slide in original['slides']:
+        for fragment in ml._slide_text(slide).splitlines():
+            assert fragment in visible
+        if slide.get('notes'):
+            assert slide['notes'] in notes
+    assert candidate == original
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize('requested_title', [None, 'Food waste pilot'])
@@ -98,6 +126,59 @@ def test_generated_cover_names_the_document_subject(monkeypatch, ml, inputs, req
     for key in ('subtitle', 'caption', 'notes'):
         assert result['slides'][0][key] == candidate['slides'][0][key]
     assert candidate == original
+
+
+def test_budget_merge_preserves_column_labels_and_notes(monkeypatch, ml, inputs):
+    candidate = {'title': 'Pilot', 'slides': [
+        {'layout': 'title', 'title': 'Pilot'},
+        {'layout': 'two-column', 'title': 'Comparison',
+         'leftTitle': 'Before', 'left': ['48 kg/day'],
+         'rightTitle': 'After', 'right': ['33 kg/day'], 'notes': 'One site only.'},
+        {'layout': 'bullets', 'title': 'Limits', 'bullets': ['Budget not approved'],
+         'notes': 'No control group.'},
+        {'layout': 'closing', 'title': 'Conclusion'},
+    ]}
+    calls = provider(monkeypatch, ml, candidate)
+    result = ml.generate(**dict(inputs, text='Source material. ' * 100, slideCount=3))
+    assert len(result['slides']) == 3
+    merged = result['slides'][1]
+    for fragment in ['Comparison', 'Before', '48 kg/day', 'After', '33 kg/day',
+                     'Limits', 'Budget not approved']:
+        assert fragment in merged['body']
+    assert 'One site only.' in merged['notes']
+    assert 'No control group.' in merged['notes']
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('large_notes', [False, True])
+def test_budget_merge_rejects_utf16_or_notes_overflow(monkeypatch, ml, inputs, large_notes):
+    candidate = {'title': 'Pilot', 'slides': [
+        {'layout': 'title', 'title': 'Pilot'},
+        *[{'layout': 'text', 'title': f'Fact {i}',
+           'body': 'Short fact.' if large_notes else '\U0001f600' * 220,
+           'notes': 'N' * 5001 if large_notes else 'Short note.'} for i in range(2)],
+        {'layout': 'closing', 'title': 'Conclusion'},
+    ]}
+    calls = provider(monkeypatch, ml, candidate)
+    with pytest.raises(ValueError, match='readable slide budget'):
+        ml.generate(**dict(inputs, text='Source material. ' * 100, slideCount=3))
+    assert len(calls) == 1
+
+
+def test_budget_merge_finds_valid_partition_instead_of_greedy_dead_end(monkeypatch, ml, inputs):
+    candidate = {'title': 'Pilot', 'slides': [
+        {'layout': 'title', 'title': 'Pilot'},
+        *[{'layout': 'text', 'title': str(i), 'body': str(i) * size}
+          for i, size in enumerate([600, 190, 190, 600])],
+        {'layout': 'closing', 'title': 'Conclusion'},
+    ]}
+    provider(monkeypatch, ml, candidate)
+    result = ml.generate(**dict(inputs, text='Source material. ' * 100, slideCount=4))
+    assert len(result['slides']) == 4
+    assert '0' * 600 in result['slides'][1]['body']
+    assert '1' * 190 in result['slides'][1]['body']
+    assert '2' * 190 in result['slides'][2]['body']
+    assert '3' * 600 in result['slides'][2]['body']
 
 
 def test_revision_schema_requires_slide_ids(ml):

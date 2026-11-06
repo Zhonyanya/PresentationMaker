@@ -106,8 +106,8 @@ def main():
         'scope': os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS'),
         'prompt_version': get_prompt_version(),
         'prompt_sha256': hashlib.sha256(build_generation_prompt().encode()).hexdigest(),
-        'generation_policy': 'total-slide-budget-v1-short-source-verbatim-pack',
-        'normalization_policy': 'document-cover-title-closing-heading-join-v4',
+        'generation_policy': 'total-slide-budget-v2-adjacent-verbatim-pack',
+        'normalization_policy': 'document-cover-title-closing-heading-join-v5',
         'source_sections_policy': ('headings-v1' if get_prompt_version() in ('v5', 'v6', 'v7')
                                    else 'none'),
         'grounding_policy': 'source-quotes-v1' if get_prompt_version() == 'v7' else 'none',
