@@ -66,6 +66,9 @@ def _schema(revision=False, slide_count=None, grounded=False, slide_ids=None, fr
     else:
         for definition in schema.get("$defs", {}).values():
             definition.get("properties", {}).pop("id", None)
+            if definition.get('properties', {}).get('layout', {}).get('const') == 'closing':
+                definition.setdefault('required', []).append('subtitle')
+                definition['properties']['subtitle']['minLength'] = 1
             if grounded and 'layout' in definition.get('properties', {}):
                 minimum = (0 if definition['properties']['layout'].get('const')
                            in ('title', 'closing') else 1)
@@ -204,6 +207,25 @@ def _fit_generation_budget(document, target_count):
     return document
 
 
+def _fill_generation_closing(document, *, recap_slides):
+    """Fill an empty ending from a complete block before budget compaction."""
+    closing = document['slides'][-1]
+    if closing.get('subtitle', '').strip():
+        return
+    for slide in reversed(recap_slides):
+        replace_title = (not closing['title'].strip()
+                         or closing['title'].strip() == document['title'].strip())
+        include_title = not replace_title and closing['title'].strip() != slide['title'].strip()
+        recap = _slide_text(slide, include_title=include_title).strip()
+        # Reuse the whole block so facts keep their qualifications. Never clip.
+        if slide['title'].strip() and recap and len(recap.encode('utf-16-le')) // 2 <= 400:
+            if replace_title:
+                closing['title'] = slide['title']
+            closing['subtitle'] = recap
+            return
+    raise ValueError('Generated document has no readable closing recap')
+
+
 def generate(*, text, slideCount, job_id, deadline, title=None):
     timeout = remaining_seconds(deadline)
     version = get_prompt_version()
@@ -232,6 +254,7 @@ def generate(*, text, slideCount, job_id, deadline, title=None):
     if version == 'v7':
         result = attach_source_quotes(result, text)
     normalized = _join_generation_headings(_normalize(result, True))
+    recap_slides = normalized['slides'][1:-1]
     if short_budget:
         normalized = _pack_short_generation(normalized, target_count)
     else:
@@ -240,6 +263,9 @@ def generate(*, text, slideCount, job_id, deadline, title=None):
     # Reject overflow instead of silently publishing N+1 or discarding content.
     if len(normalized['slides']) > target_count:
         raise ValueError('Generated document exceeds requested slide budget')
+    # Detect the synthesized document-title placeholder before an explicit title
+    # replaces the model's document title.
+    _fill_generation_closing(normalized, recap_slides=recap_slides)
     cover_title = title.strip() if title and title.strip() else normalized['title']
     normalized['title'] = cover_title
     normalized['slides'][0]['title'] = cover_title

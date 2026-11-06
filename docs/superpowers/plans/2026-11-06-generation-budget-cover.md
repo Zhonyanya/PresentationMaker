@@ -22,4 +22,12 @@ Added ordered-partition recovery for long-source overflow. Adjacent internal sli
 
 Final validation: 93 tests passed; independent review had no remaining blockers. Saved candidate replayed with network disabled, yielding exactly 7 with all content fragments preserved; native frontend PPTX export and rendered cover/merged/closing slides checked. API/worker updated with idle queue, health OK and deployed/source hashes matched. No further paid calls; diagnostic raw data remains outside repository. This supersedes the earlier validation note for the follow-up only.
 
+## Follow-up: substantive closing
+
+The supplied laboratory-booking PPTX had four slides; its closing repeated the full document title without subtitle, matching the synthesized fallback. Added generation-only schema/prompt requirements for nonempty closing subtitle with source-grounded outcome, qualifications and any stated next step.
+
+Fallback now reuses a complete visible content block from before budget packing, at most 400 UTF-16 units. Preserve its heading in the closing heading or subtitle so qualifiers are not lost. Repair runs before explicit cover-title alignment. Meaningful existing closings and revision remain unchanged; no safe whole recap means validation failure rather than clipping, invention or retry. Acceptance normalization fingerprint is v6.
+
+Regressions observed failing before fixes: missing closing in English, explicit user title, empty topic repeat, unreadable recap, generic heading with qualification in source title. Final suite: 98 passed. Independent review has no remaining blockers. Current synthetic document replayed offline with unchanged first three slides and count; export works. A separate user-facing copy gives a source-grounded outcome/limitation/next-step closing, first three slide texts verified identical, final render inspected. No paid calls in this follow-up. API/worker rebuilt and health verified.
+
 Ruling: Work in the existing ml checkout to update the already configured local test stand. No branch switching, push, or changes to secrets. Short sources may still yield fewer slides, as required by the existing contract. Minimal-word mode is a separate follow-up.

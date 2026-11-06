@@ -433,16 +433,82 @@ def test_v3_checks_final_count_after_structural_normalization(monkeypatch, ml, v
         ml.generate(**dict(inputs, slideCount=8))
 
 
-def test_generated_closing_uses_document_title_without_assuming_language(monkeypatch, ml, inputs):
+@pytest.mark.parametrize('requested_title', [None, 'User heading'])
+def test_generated_closing_reuses_content_without_assuming_language(
+    monkeypatch, ml, inputs, requested_title,
+):
     candidate = {'title': 'Incident review', 'slides': [
         {'layout': 'title', 'title': 'Incident review'},
         {'layout': 'text', 'title': 'Scope', 'body': 'The root cause is unconfirmed.'},
     ]}
     provider(monkeypatch, ml, candidate)
-    result = ml.generate(**inputs)
+    result = ml.generate(**inputs, title=requested_title)
     assert result['slides'][-1]['layout'] == 'closing'
-    assert result['slides'][-1]['title'] == 'Incident review'
+    assert result['slides'][-1]['title'] == 'Scope'
+    assert result['slides'][-1]['subtitle'] == 'The root cause is unconfirmed.'
     assert result['slides'][1] == dict(candidate['slides'][1], id=result['slides'][1]['id'])
+
+
+def test_generation_repairs_empty_cover_repeat_as_closing(monkeypatch, ml, inputs):
+    candidate = {'title': 'Laboratory booking', 'slides': [
+        {'layout': 'title', 'title': 'Laboratory booking'},
+        {'layout': 'bullets', 'title': 'Pilot results',
+         'bullets': ['12 conflicts before; 3 during the pilot.',
+                     'One laboratory; wider rollout is not yet approved.'],
+         'notes': 'Keep the qualification visible.'},
+        {'layout': 'closing', 'title': 'Laboratory booking'},
+    ]}
+    original = copy.deepcopy(candidate)
+    provider(monkeypatch, ml, candidate)
+    result = ml.generate(**inputs)
+    closing = result['slides'][-1]
+    assert closing['title'] == 'Pilot results'
+    assert '12 conflicts before; 3 during the pilot.' in closing['subtitle']
+    assert 'wider rollout is not yet approved' in closing['subtitle']
+    assert result['slides'][1]['bullets'] == candidate['slides'][1]['bullets']
+    assert len(result['slides']) == len(candidate['slides'])
+    assert candidate == original
+
+
+def test_generation_rejects_unreadable_empty_closing_without_retry(monkeypatch, ml, inputs):
+    candidate = {'title': 'Pilot', 'slides': [
+        {'layout': 'title', 'title': 'Pilot'},
+        {'layout': 'text', 'title': 'Results', 'body': '\U0001f600' * 201},
+        {'layout': 'closing', 'title': 'Pilot'},
+    ]}
+    calls = provider(monkeypatch, ml, candidate)
+    with pytest.raises(ValueError, match='readable closing recap'):
+        ml.generate(**dict(inputs, text='Source material. ' * 100))
+    assert len(calls) == 1
+
+
+def test_generation_fills_title_only_closing_without_changing_heading(monkeypatch, ml, inputs):
+    candidate = {'title': 'Pilot', 'slides': [
+        {'layout': 'title', 'title': 'Pilot'},
+        {'layout': 'text', 'title': 'Only in one laboratory', 'body': 'Conflicts fell 75%.'},
+        {'layout': 'closing', 'title': 'Conclusion', 'notes': 'Existing notes.'},
+    ]}
+    provider(monkeypatch, ml, candidate)
+    result = ml.generate(**inputs)
+    assert result['slides'][-1]['title'] == 'Conclusion'
+    assert result['slides'][-1]['subtitle'] == 'Only in one laboratory\nConflicts fell 75%.'
+    assert result['slides'][-1]['notes'] == 'Existing notes.'
+
+
+def test_generation_preserves_meaningful_closing(monkeypatch, ml, inputs):
+    candidate = {'title': 'Laboratory booking', 'slides': [
+        {'layout': 'title', 'title': 'Laboratory booking'},
+        {'layout': 'text', 'title': 'Pilot', 'body': 'One laboratory.'},
+        {'layout': 'closing', 'title': 'Next step',
+         'subtitle': 'Test two more laboratories; budget is not approved.',
+         'notes': 'No automatic rollout.'},
+    ]}
+    calls = provider(monkeypatch, ml, candidate)
+    result = ml.generate(**inputs)
+    assert {k: v for k, v in result['slides'][-1].items() if k != 'id'} == candidate['slides'][-1]
+    closing_schema = calls[0]['schema']['$defs']['ClosingSlide']
+    assert 'subtitle' in closing_schema['required']
+    assert closing_schema['properties']['subtitle']['minLength'] == 1
 
 
 @pytest.mark.parametrize('version', ['v3', 'v4'])
