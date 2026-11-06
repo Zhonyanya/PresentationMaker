@@ -68,6 +68,29 @@ def test_live_run_requires_explicit_case_selection(monkeypatch, tmp_path):
     assert result.value.code == 2
 
 
+def test_live_cache_tracks_generation_structure_prompt(monkeypatch, tmp_path, document):
+    import json
+
+    import presentation_ml
+    from presentation_ml import prompts
+    from tools import ml_acceptance
+
+    cases = tmp_path / 'cases.json'
+    cases.write_text(json.dumps([{'id': 'case', 'text': 'Report ' * 200, 'slideCount': 6}]))
+    monkeypatch.setattr(ml_acceptance, 'CASES', cases)
+    monkeypatch.setattr('sys.argv', ['acceptance', '--live', '--case', 'case',
+                                   '--output', str(tmp_path / 'out')])
+    calls = []
+    monkeypatch.setattr(presentation_ml, 'generate',
+                        lambda **kwargs: calls.append(kwargs) or document)
+    assert ml_acceptance.main() == 0
+    original = prompts.build_generation_prompt()
+    monkeypatch.setattr(prompts, 'build_generation_prompt', lambda: original + '\nNew rules')
+    with pytest.raises(RuntimeError, match='profile changed'):
+        ml_acceptance.main()
+    assert len(calls) == 1
+
+
 def test_error_classification_never_stores_exception_text():
     import json
     import socket

@@ -98,16 +98,16 @@ def main():
     args = parser.parse_args()
     if args.live and not args.case_ids:
         parser.error('--live requires explicit --case selections to bound provider usage')
-    from presentation_ml.prompts import build_prompt, get_prompt_version
+    from presentation_ml.prompts import build_generation_prompt, get_prompt_version
 
     profile = {
         'provider': os.getenv('PM_ML_PROVIDER', 'gigachat'),
         'model': os.getenv('GIGACHAT_MODEL', ''),
         'scope': os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS'),
         'prompt_version': get_prompt_version(),
-        'prompt_sha256': hashlib.sha256(build_prompt('generate').encode()).hexdigest(),
-        'generation_policy': 'v3-short-source-budget-v2-verbatim-pack',
-        'normalization_policy': 'document-title-closing-heading-join-v3',
+        'prompt_sha256': hashlib.sha256(build_generation_prompt().encode()).hexdigest(),
+        'generation_policy': 'total-slide-budget-v1-short-source-verbatim-pack',
+        'normalization_policy': 'document-cover-title-closing-heading-join-v4',
         'source_sections_policy': ('headings-v1' if get_prompt_version() in ('v5', 'v6', 'v7')
                                    else 'none'),
         'grounding_policy': 'source-quotes-v1' if get_prompt_version() == 'v7' else 'none',

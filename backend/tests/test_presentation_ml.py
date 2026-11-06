@@ -46,6 +46,60 @@ def test_generate_single_request(monkeypatch, ml, inputs, document):
     assert "Название" in calls[0]["payload"]["title"]
 
 
+@pytest.mark.parametrize('count', [3, 7, 8])
+def test_long_generation_budget_includes_cover_and_closing(monkeypatch, ml, inputs, count):
+    candidate = {'title': 'Pilot results', 'slides': [
+        {'layout': 'title', 'title': 'Pilot results'},
+        *[{'layout': 'text', 'title': f'Result {i}', 'body': f'Observed fact {i}'}
+          for i in range(count - 2)],
+        {'layout': 'closing', 'title': 'Conclusion'},
+    ]}
+    calls = provider(monkeypatch, ml, candidate)
+    result = ml.generate(**dict(inputs, text='Source material. ' * 100, slideCount=count))
+    assert len(result['slides']) == count
+    assert calls[0]['schema']['properties']['slides']['maxItems'] == count
+    assert 'generation-wire-v1' in calls[0]['system']
+    assert 'document.title' in calls[0]['system']
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('missing_boundaries', [False, True])
+def test_long_generation_rejects_final_overflow_without_truncation_or_retry(
+    monkeypatch, ml, inputs, missing_boundaries,
+):
+    slides = [{'layout': 'text', 'title': f'Result {i}', 'body': f'Fact {i}'}
+              for i in range(6)]
+    if not missing_boundaries:
+        slides = [{'layout': 'title', 'title': 'Pilot'}, *slides,
+                  {'layout': 'closing', 'title': 'Conclusion'}]
+    candidate = {'title': 'Pilot', 'slides': slides}
+    original = copy.deepcopy(candidate)
+    calls = provider(monkeypatch, ml, candidate)
+    with pytest.raises(ValueError, match='slide budget'):
+        ml.generate(**dict(inputs, text='Source material. ' * 100, slideCount=7))
+    assert len(calls) == 1
+    assert candidate == original
+
+
+@pytest.mark.parametrize('requested_title', [None, 'Food waste pilot'])
+def test_generated_cover_names_the_document_subject(monkeypatch, ml, inputs, requested_title):
+    candidate = {'title': 'Reducing food waste', 'slides': [
+        {'layout': 'title', 'title': 'Problem and goal', 'subtitle': 'March 2026',
+         'caption': 'University canteen', 'notes': 'Scope: one canteen.'},
+        {'layout': 'text', 'title': 'Results', 'body': '48 to 33 kg per day.'},
+        {'layout': 'closing', 'title': 'Conclusion'},
+    ]}
+    original = copy.deepcopy(candidate)
+    provider(monkeypatch, ml, candidate)
+    result = ml.generate(**inputs, title=requested_title)
+    expected = requested_title or candidate['title']
+    assert result['title'] == expected
+    assert result['slides'][0]['title'] == expected
+    for key in ('subtitle', 'caption', 'notes'):
+        assert result['slides'][0][key] == candidate['slides'][0][key]
+    assert candidate == original
+
+
 def test_revision_schema_requires_slide_ids(ml):
     schema = ml._schema(revision=True)
     for definition in schema['$defs'].values():

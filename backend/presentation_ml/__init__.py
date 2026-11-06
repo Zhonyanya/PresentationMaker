@@ -7,7 +7,7 @@ from app.presentations.schemas import Document, normalize_document, validate_rev
 
 from .capabilities import reject_explicit_structure_change
 from .grounding import attach_source_quotes
-from .prompts import build_prompt, build_revision_prompt, get_prompt_version
+from .prompts import build_generation_prompt, build_revision_prompt, get_prompt_version
 from .transport import request_document
 
 PRESERVES_SLIDE_IDS = True
@@ -160,8 +160,8 @@ def generate(*, text, slideCount, job_id, deadline, title=None):
     short_budget = version in ('v3', 'v4', 'v5', 'v6', 'v7') and len(text) < 1000
     target_count = min(slideCount, 4) if short_budget else slideCount
     schema = _schema(grounded=version == 'v7')
-    if short_budget:
-        schema['properties']['slides']['maxItems'] = target_count
+    # The budget always includes cover and closing, not just content slides.
+    schema['properties']['slides']['maxItems'] = target_count
     payload = {"operation": "generate", "text": text, "slideCount": target_count}
     if version in ('v5', 'v6', 'v7'):
         sections = []
@@ -175,7 +175,7 @@ def generate(*, text, slideCount, job_id, deadline, title=None):
     if title is not None:
         payload["title"] = title
     result = request_document(
-        system=build_prompt('generate'),
+        system=build_generation_prompt(),
         payload=payload, schema=schema, timeout=timeout,
     )
     remaining_seconds(deadline)
@@ -184,7 +184,14 @@ def generate(*, text, slideCount, job_id, deadline, title=None):
     normalized = _join_generation_headings(_normalize(result, True))
     if short_budget:
         normalized = _pack_short_generation(normalized, target_count)
-    return normalized
+    # Structural normalization may have inserted missing boundary slides.
+    # Reject overflow instead of silently publishing N+1 or discarding content.
+    if len(normalized['slides']) > target_count:
+        raise ValueError('Generated document exceeds requested slide budget')
+    cover_title = title.strip() if title and title.strip() else normalized['title']
+    normalized['title'] = cover_title
+    normalized['slides'][0]['title'] = cover_title
+    return _normalize(normalized, True)
 
 
 def revise(*, document, text, slideCount, instruction, target_slide_numbers,
