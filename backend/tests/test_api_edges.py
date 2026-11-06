@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 import anyio
 import pytest
 from conftest import generate, headers, register
+from fastapi.testclient import TestClient
 from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from sqlalchemy import func, select
@@ -15,6 +16,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.db.models import Job, Presentation, Session, User, utcnow
 from app.jobs.service import submit
+from app.main import create_app
 from app.presentations.schemas import GenerateRequest
 
 
@@ -189,7 +191,7 @@ def test_existing_csrf_session_is_reused_and_old_csrf_cannot_logout_rotated_sess
 
 
 @pytest.mark.parametrize("dependency", ["healthy", "redis", "ml"])
-def test_health_readiness_and_liveness(client, monkeypatch, dependency):
+def test_health_readiness_and_liveness(database, monkeypatch, dependency):
     if dependency == "redis":
         async def unavailable(*args, **kwargs):
             raise RedisConnectionError("private dependency URL")
@@ -198,12 +200,14 @@ def test_health_readiness_and_liveness(client, monkeypatch, dependency):
     elif dependency == "ml":
         monkeypatch.setattr(get_settings(), "ml_adapter", "module")
         monkeypatch.setattr(get_settings(), "ml_module", "_pm_nonexistent_test_ml_module")
-    assert client.get("/api/v1/health/live").json() == {"status": "ok"}
-    response = client.get("/api/v1/health/ready")
-    assert response.status_code == (200 if dependency == "healthy" else 503)
-    if dependency == "healthy":
-        assert response.json() == {"status": "ok", "ml_adapter": "fixture"}
-    else:
-        assert response.json()["error"]["code"] == "NOT_READY"
-        assert response.json()["request_id"] == response.headers["x-request-id"]
-        assert "private" not in response.text
+    # ModuleReadiness captures its module at app creation, not on every request.
+    with TestClient(create_app()) as client:
+        assert client.get("/api/v1/health/live").json() == {"status": "ok"}
+        response = client.get("/api/v1/health/ready")
+        assert response.status_code == (200 if dependency == "healthy" else 503)
+        if dependency == "healthy":
+            assert response.json() == {"status": "ok", "ml_adapter": "fixture"}
+        else:
+            assert response.json()["error"]["code"] == "NOT_READY"
+            assert response.json()["request_id"] == response.headers["x-request-id"]
+            assert "private" not in response.text
