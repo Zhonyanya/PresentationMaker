@@ -84,10 +84,66 @@ describe('серверный контракт v1', () => {
   })
 
   it('не принимает невалидный документ и не нормализует ID повторно', async () => {
-    const api = createServerApi({ baseUrl: '', fetch: vi.fn(async () => json({ presentation_id: id, document, document_token: 'token', requested_slide_count: 8, slide_count: 6, active_job: null })) })
+    // Копия: общая фикстура не должна меняться, даже если проверка ниже упадёт
+    const broken = structuredClone(document)
+    broken.slides[0].layout = 'unknown'
+    const mock = vi.fn()
+      .mockResolvedValueOnce(json({ presentation_id: id, document, document_token: 'token', requested_slide_count: 8, slide_count: 6, active_job: null }))
+      .mockResolvedValueOnce(json({ presentation_id: id, document: broken, document_token: 'token', requested_slide_count: 8, slide_count: 6, active_job: null }))
+    const api = createServerApi({ baseUrl: '', fetch: mock })
     expect((await api.current(id)).document?.slides.map((s) => s.id)).toEqual(document.slides.map((s: { id: string }) => s.id))
-    document.slides[0].layout = 'unknown'
     await expect(api.current(id)).rejects.toMatchObject({ code: 'invalid_response' })
-    document.slides[0].layout = 'title'
+  })
+})
+
+describe('ошибки и смена пользователя', () => {
+  const failure = (status: number) => json({ error: { code: 'X', message: 'Сообщение сервера' } }, status)
+
+  it('401 сообщает приложению об окончании сессии, кроме неудачного входа', async () => {
+    const dispatch = vi.fn()
+    vi.stubGlobal('dispatchEvent', dispatch)
+    try {
+      const mock = vi.fn().mockResolvedValueOnce(failure(401))
+        .mockResolvedValueOnce(json({ csrf_token: 'csrf' })).mockResolvedValueOnce(failure(401))
+      const api = createServerApi({ baseUrl: '', fetch: mock })
+      await expect(api.me()).rejects.toMatchObject({ code: 'unauthorized' })
+      expect(dispatch).toHaveBeenCalledTimes(1)
+      expect(dispatch.mock.calls[0][0].type).toBe('pm:unauthorized')
+      await expect(api.authenticate('login', 'user', 'неверный')).rejects.toMatchObject({ code: 'unauthorized' })
+      expect(dispatch).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('ответ, пришедший после выхода, не применяется к новому пользователю', async () => {
+    let resolve!: (response: Response) => void
+    const api = createServerApi({ baseUrl: '', fetch: vi.fn(() => new Promise<Response>((r) => { resolve = r })) })
+    const pending = api.me()
+    api.forget()
+    resolve(json({ user: { id, login: 'прежний' } }))
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' })
+  })
+
+  it('отмена вызывающим — aborted, истечение времени — timeout', async () => {
+    const hang = vi.fn((_: unknown, init: RequestInit) => new Promise<Response>((_, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+    }))
+    const caller = new AbortController()
+    const pending = createServerApi({ baseUrl: '', fetch: hang as unknown as typeof fetch }).status(id, caller.signal)
+    caller.abort()
+    await expect(pending).rejects.toMatchObject({ code: 'aborted' })
+    const slow = createServerApi({ baseUrl: '', fetch: hang as unknown as typeof fetch, requestTimeoutMs: 5 })
+    await expect(slow.status(id)).rejects.toMatchObject({ code: 'timeout' })
+  })
+
+  it('коды ответа и сбои сети сводятся к понятным категориям', async () => {
+    const api = (response: () => Promise<Response>) => createServerApi({ baseUrl: '', fetch: vi.fn(response) })
+    await expect(api(async () => failure(429)).list()).rejects.toMatchObject({ code: 'rate_limited', message: 'Сообщение сервера' })
+    await expect(api(async () => failure(404)).list()).rejects.toMatchObject({ code: 'not_found' })
+    await expect(api(async () => { throw new TypeError('Failed to fetch') }).list()).rejects.toMatchObject({ code: 'network' })
+    await expect(api(async () => new Response('<html>ok</html>', { status: 200 })).list()).rejects.toMatchObject({ code: 'invalid_response' })
+    // Страница прокси вместо JSON: категория берётся из статуса
+    await expect(api(async () => new Response('<html>Bad Gateway</html>', { status: 502 })).list()).rejects.toMatchObject({ code: 'server' })
   })
 })

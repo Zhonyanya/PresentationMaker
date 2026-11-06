@@ -11,7 +11,8 @@ import { usePresentationScenes } from '@/hooks/usePresentationScenes'
 import { CreatePage } from '@/features/create/CreatePage'
 import { ReadyCurtain } from '@/features/generation/ReadyCurtain'
 import { AuthScreen, SessionCheck, type AuthKind } from './AuthScreen'
-import { AccountControls, JobWaiting, Library, Notice, PausedJob, ServerEditor, type JobKind } from './ServerWorkspace'
+import { AccountControls, InfoNote, JobWaiting, Library, Notice, PausedJob, ServerEditor, type JobKind } from './ServerWorkspace'
+import { jobFailure, pollFailure, slideShortfall } from './job-messages'
 import { useMlStub } from '@/components/app/ModeBadges'
 import { Button } from '@/components/ui/button'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -22,14 +23,43 @@ const api = createServerApi({ baseUrl: env.apiBaseUrl })
 const referenceKey = (user: ServerUser) => `pm:current:${user.id}`
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** Poll failures worth retrying: the job keeps running on the server meanwhile. */
-const TRANSIENT = new Set(['network', 'timeout', 'server', 'rate_limited'])
 const POLL_RETRIES = 5
+/** Ошибки, после которых имеет смысл перечитать документ с сервера */
+const REFRESHABLE = new Set(['conflict', 'network', 'timeout', 'server', 'invalid_response'])
 
 /** crypto.randomUUID exists only in secure contexts (HTTPS/localhost); getRandomValues works everywhere. */
 function randomKey(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** Start time and kind of a running job: survive a reload so the timer and completion toast stay right. */
+const jobMetaKey = (jobId: string) => `pm:job:${jobId}`
+function saveJobMeta(jobId: string, kind: JobKind, startedAt: number) {
+  safeStorage.setItem(jobMetaKey(jobId), JSON.stringify({ kind, startedAt }))
+}
+async function readJobMeta(jobId: string): Promise<{ kind: JobKind; startedAt: number | null }> {
+  try {
+    const raw = await safeStorage.getItem(jobMetaKey(jobId))
+    const meta: unknown = raw ? JSON.parse(raw) : null
+    const { kind, startedAt } = (meta ?? {}) as { kind?: unknown; startedAt?: unknown }
+    return {
+      kind: kind === 'generate' || kind === 'revise' ? kind : null,
+      startedAt: typeof startedAt === 'number' && startedAt <= Date.now() ? startedAt : null,
+    }
+  } catch {
+    return { kind: null, startedAt: null }
+  }
+}
+/** При выходе и удалении аккаунта в браузере не остаётся сведений о прежних заданиях. */
+function forgetJobMeta() {
+  try {
+    for (const key of Object.keys(globalThis.localStorage ?? {})) {
+      if (key.startsWith('pm:job:')) safeStorage.removeItem(key)
+    }
+  } catch {
+    /* хранилище недоступно — удалять нечего */
+  }
 }
 
 /** Only references are persisted, never source text, commands, passwords or documents. */
@@ -61,6 +91,12 @@ function Workspace() {
   const [jobStartedAt, setJobStartedAt] = useState<number | null>(null)
   const [ready, setReady] = useState<number | null>(null)
   const [library, setLibrary] = useState<LibraryItem[]>([])
+  const [libraryFailed, setLibraryFailed] = useState(false)
+  // Кнопка «Обновить документ» уместна, только если документ мог измениться на сервере
+  const [errorCanRefresh, setErrorCanRefresh] = useState(false)
+  const draftText = useFlowStore((s) => s.draft.text)
+  // Документ, для которого пояснение о числе слайдов уже закрыто
+  const [shortfallSeen, setShortfallSeen] = useState<string | null>(null)
   const jobKindRef = useRef<JobKind>(null)
   const editorRef = useRef(false)
   const waitingRef = useRef(false)
@@ -113,7 +149,9 @@ function Workspace() {
       // Server active_job is authoritative; completed jobs need no resumed polling.
       setJob(value.active_job)
       setWaiting(Boolean(value.active_job))
-      setJobKind(null); setJobStartedAt(value.active_job ? Date.now() : null)
+      const meta = value.active_job ? await readJobMeta(value.active_job.job_id) : { kind: null, startedAt: null }
+      if (activeEpoch !== epoch.current) return
+      setJobKind(meta.kind); setJobStartedAt(value.active_job ? meta.startedAt ?? Date.now() : null)
       setEditor(Boolean(value.document))
       saveReference(account, value.presentation_id, value.active_job)
     } catch (cause) {
@@ -201,6 +239,7 @@ function Workspace() {
         saveReference(user, value.presentation_id, value.active_job)
         const kind = jobKindRef.current
         setJobKind(null)
+        safeStorage.removeItem(jobMetaKey(jobId))
         if (status.status === 'succeeded' && paused) {
           // Пользователь ушёл к форме: не перебрасываем его, а предлагаем открыть результат
           setInstruction('')
@@ -218,17 +257,31 @@ function Workspace() {
           setEditor(Boolean(value.document))
           setInstruction('')
           setError(status.output_document_token !== value.document_token ? 'Документ уже обновлён другой задачей. Показан текущий результат, не архив.' : '')
-        } else setError(status.error?.message ?? 'Задание завершилось с ошибкой. Предыдущий документ сохранён.')
+        } else {
+          const failure = jobFailure(status.error, kind)
+          setError(failure.message); setErrorCanRefresh(failure.canRefresh)
+        }
       } catch (cause) {
         if (controller.signal.aborted || activeEpoch !== epoch.current) return
         const error = toApiError(cause)
+        const action = pollFailure(error.code, failures, POLL_RETRIES)
         // Разовый сбой сети или прокси не повод бросать ожидание: повторяем с растущей паузой
-        if (TRANSIENT.has(error.code) && failures < POLL_RETRIES) {
+        if (action === 'retry') {
           failures++
           later(Math.min(2500 * 2 ** failures, 30000))
           return
         }
-        setError(`${error.message} Остановка ожидания не отменяет задание.`)
+        if (action === 'drop') {
+          // Статус этого задания больше не получить: перестаём его отслеживать,
+          // актуальное состояние покажет «Обновить документ»
+          safeStorage.removeItem(jobMetaKey(jobId))
+          setJob(null); setJobKind(null)
+          saveReference(user, jobPresentationId, null)
+          setError(`Не удалось узнать, чем закончилось задание: ${error.message}`)
+        } else {
+          setError(`${error.message} Остановка ожидания не отменяет задание.`)
+        }
+        setErrorCanRefresh(true)
         setWaiting(false)
       }
     }
@@ -238,16 +291,17 @@ function Workspace() {
 
   const refreshLibrary = useCallback(async () => {
     try {
-      setLibrary(await api.list())
+      setLibrary(await api.list()); setLibraryFailed(false)
     } catch {
-      /* Список вторичен: ошибка сети не должна заслонять основной сценарий */
+      // Список вторичен: не заслоняем основной сценарий общей ошибкой, но и не выдаём сбой за пустой список
+      setLibraryFailed(true)
     }
   }, [])
   // Обновляем после входа, завершения задания и смены документа
   const documentToken = current?.document_token
   useEffect(() => {
     if (user) void refreshLibrary()
-    else setLibrary([])
+    else { setLibrary([]); setLibraryFailed(false) }
   }, [user, jobId, documentToken, refreshLibrary])
 
   const authenticate = async (event: FormEvent) => {
@@ -270,6 +324,7 @@ function Workspace() {
       await api.logout()
       // На общем компьютере следующий человек не должен видеть ссылку на чужую работу
       if (userRef.current) safeStorage.removeItem(referenceKey(userRef.current))
+      forgetJobMeta()
       clearPrivate()
       safeStorage.setItem('pm:auth-change', randomKey())
     } catch (cause) { setError(toApiError(cause).message) }
@@ -297,13 +352,17 @@ function Workspace() {
       if (activeEpoch !== epoch.current) return
       submission.current = null
       setJob(accepted); setWaiting(true); setPhase('waiting')
-      setJobKind(operation); setJobStartedAt(Date.now())
+      const startedAt = Date.now()
+      setJobKind(operation); setJobStartedAt(startedAt)
+      saveJobMeta(accepted.job_id, operation, startedAt)
       saveReference(user, accepted.presentation_id, accepted)
       // Polling loads the document after completion. An eager GET here could
       // arrive late with document: null and overwrite the successful result.
     } catch (cause) {
       if (activeEpoch !== epoch.current) return
-      setError(cause instanceof Error && cause.name === 'Error' ? cause.message : toApiError(cause).message)
+      const apiError = cause instanceof Error && cause.name === 'Error' ? null : toApiError(cause)
+      setError(apiError ? apiError.message : (cause as Error).message)
+      setErrorCanRefresh(Boolean(apiError && REFRESHABLE.has(apiError.code)))
     } finally { if (activeEpoch === epoch.current) setBusy(false) }
   }
 
@@ -344,8 +403,9 @@ function Workspace() {
     try {
       const value = await api.current(id)
       if (activeEpoch !== epoch.current) return
-      applyCurrent(value); setJob(value.active_job); setWaiting(Boolean(value.active_job)); setJobKind(null)
-      setJobStartedAt(value.active_job ? Date.now() : null)
+      applyCurrent(value); setJob(value.active_job); setWaiting(Boolean(value.active_job))
+      const meta = value.active_job ? await readJobMeta(value.active_job.job_id) : { kind: null, startedAt: null }
+      setJobKind(meta.kind); setJobStartedAt(value.active_job ? meta.startedAt ?? Date.now() : null)
       setEditor(Boolean(value.document)); setInstruction(''); setTargets(''); submission.current = null
       saveReference(user, value.presentation_id, value.active_job)
     } catch (cause) {
@@ -368,6 +428,7 @@ function Workspace() {
     try {
       await api.deleteAccount(accountPassword)
       safeStorage.removeItem(referenceKey(user))
+      forgetJobMeta()
       clearPrivate()
       safeStorage.setItem('pm:auth-change', randomKey())
       toast.success('Аккаунт и все данные удалены')
@@ -382,9 +443,15 @@ function Workspace() {
     <Notice
       message={error}
       onDismiss={() => setError('')}
-      action={current && <Button variant="link" size="sm" className="h-auto shrink-0 text-destructive" onClick={() => void refresh()}>Обновить документ</Button>}
+      action={current && errorCanRefresh && <Button variant="link" size="sm" className="h-auto shrink-0 text-destructive" onClick={() => void refresh()}>Обновить документ</Button>}
     />
   ) : null
+
+  const shortfall = slideShortfall(current)
+  const shortfallKey = current ? `${current.presentation_id}:${current.document_token}` : null
+  const shortfallNote = shortfall && shortfallKey !== shortfallSeen
+    ? <InfoNote message={shortfall} onDismiss={() => setShortfallSeen(shortfallKey)} />
+    : null
 
   let screen
   if (editor && document && selected) {
@@ -395,7 +462,7 @@ function Workspace() {
         selected={document.slides[selectedIndex] ?? selected}
         selectedIndex={selectedIndex}
         account={account}
-        notice={notice}
+        notice={notice || shortfallNote ? <div className="flex flex-col gap-2">{notice}{shortfallNote}</div> : undefined}
         job={job ? { phase, waiting, onLeave: leaveWaiting, onResume: resumeWaiting } : null}
         exportOpen={exportOpen}
         onExportOpenChange={setExportOpen}
@@ -408,6 +475,7 @@ function Workspace() {
         onTargets={setTargets}
         onRevise={() => void launch('revise')}
         onRegenerate={leaveWaiting}
+        sourceKept={Boolean(draftText.trim())}
       />
     )
   } else if (job && waiting) {
@@ -421,7 +489,7 @@ function Workspace() {
         notice={<>
           {notice}
           {job && <PausedJob phase={phase} onResume={resumeWaiting} />}
-          <Library items={library} currentId={current?.presentation_id ?? null} busy={busy || Boolean(job)}
+          <Library items={library} failed={libraryFailed} onRetry={() => void refreshLibrary()} currentId={current?.presentation_id ?? null} busy={busy || Boolean(job)}
             onOpen={(id) => void openPresentation(id)} onDelete={(id) => void deletePresentation(id)} onDeleteAccount={deleteAccount} />
         </>}
         onGenerate={(body) => void launch('generate', body)}

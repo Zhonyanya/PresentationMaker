@@ -20,6 +20,13 @@ describe('импорт файлов', () => {
     expect(decodeText(new TextEncoder().encode('Знак � в тексте').buffer)).toBe('Знак � в тексте')
   })
 
+  it('не выдаёт файл в чужой кодировке за успешно прочитанный', () => {
+    // «Привет — «мир»» в Windows-1251: кириллица и типографика проходят
+    expect(decodeText(bytes(0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2, 0x20, 0x97, 0x20, 0xab, 0xec, 0xe8, 0xf0, 0xbb))).toBe('Привет — «мир»')
+    // Байты, которые в Windows-1251 дают служебные символы вместо букв
+    expect(() => decodeText(bytes(0x80, 0x81, 0x83, 0x8a, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x98))).toThrow(FileImportError)
+  })
+
   it('текст, начинающийся с «PK», — это текст, а не архив', () => {
     expect(decodeText(new TextEncoder().encode('PKI: инфраструктура ключей').buffer)).toBe('PKI: инфраструктура ключей')
   })

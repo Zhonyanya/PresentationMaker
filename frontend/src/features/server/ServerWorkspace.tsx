@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
-import { ArrowRight, LoaderCircle, LogOut, Plus, RotateCcw, TriangleAlert, X } from 'lucide-react'
+import { ArrowRight, Info, LoaderCircle, LogOut, Plus, RotateCcw, TriangleAlert, X } from 'lucide-react'
 import type { JobStatus, LibraryItem } from '@/api/server-api'
 import type { Presentation, Slide } from '@/domain/presentation'
 import type { SlideScene } from '@/layouts/scene'
@@ -98,6 +98,24 @@ export function Notice({ message, onDismiss, action }: { message: string; onDism
         <X className="size-4" />
       </button>
     </motion.div>
+  )
+}
+
+/** Пояснение без тревоги: результат корректен, но может удивить (например, слайдов меньше запрошенного) */
+export function InfoNote({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  return (
+    <div role="status" className="flex items-start gap-3 border-l-2 border-foreground/40 bg-card px-4 py-3 text-[14px] text-foreground/85">
+      <Info className="mt-[3px] size-4 shrink-0 text-muted-foreground" aria-hidden />
+      <p className="flex-1 leading-snug">{message}</p>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Скрыть пояснение"
+        className="-m-1 rounded p-1 text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-foreground"
+      >
+        <X className="size-4" />
+      </button>
+    </div>
   )
 }
 
@@ -316,9 +334,11 @@ interface RevisionPanelProps {
   onTargets: (value: string) => void
   onRevise: () => void
   onRegenerate: () => void
+  /** Исходный текст ещё в форме; после перезагрузки страницы его нет — он не хранится в браузере */
+  sourceKept: boolean
 }
 
-function RevisionPanel({ index, locked, busy, instruction, targets, status, onInstruction, onTargets, onRevise, onRegenerate }: RevisionPanelProps) {
+function RevisionPanel({ index, locked, busy, instruction, targets, status, onInstruction, onTargets, onRevise, onRegenerate, sourceKept }: RevisionPanelProps) {
   const disabled = busy || locked
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -332,7 +352,8 @@ function RevisionPanel({ index, locked, busy, instruction, targets, status, onIn
       <div className="flex flex-col gap-7 p-5">
         {status}
         <p className="text-[13.5px] leading-relaxed text-muted-foreground">
-          Опишите словами, что поменять, — ML-модуль перепишет слайды. Число, порядок и ID слайдов сохранятся.
+          Опишите, что поменять в тексте или макете, — ML-модуль перепишет слайды. Добавлять, удалять и переставлять слайды
+          командой нельзя: их число и порядок сохранятся.
         </p>
         <form className="flex flex-col gap-5" onSubmit={submit}>
           <div className="flex flex-col gap-2">
@@ -345,7 +366,7 @@ function RevisionPanel({ index, locked, busy, instruction, targets, status, onIn
               value={instruction}
               onChange={(e) => onInstruction(e.target.value)}
               disabled={disabled}
-              placeholder="Например: сократи пункты до одной строки и добавь вывод"
+              placeholder="Например: сократи пункты до одной строки"
               className="min-h-32 text-[14.5px]"
             />
           </div>
@@ -383,7 +404,10 @@ function RevisionPanel({ index, locked, busy, instruction, targets, status, onIn
         <div className="flex flex-col gap-3 border-t border-border pt-6">
           <h3 className="eyebrow">Начать заново</h3>
           <p className="text-[13px] leading-relaxed text-muted-foreground">
-            Полная перегенерация вернёт к форме: проверьте исходный текст и создайте новый вариант. Текущий документ останется, пока новый не будет готов.
+            {sourceKept
+              ? 'Полная перегенерация вернёт к форме: проверьте исходный текст и создайте новый вариант.'
+              : 'Полная перегенерация вернёт к форме: вставьте исходный текст заново — он не хранится в браузере — и создайте новый вариант.'}{' '}
+            Текущий документ останется, пока новый не будет готов.
           </p>
           <Button variant="outline" onClick={onRegenerate} disabled={locked} className="self-start">
             <RotateCcw aria-hidden />
@@ -526,8 +550,11 @@ function AccountDeletion({ busy, onDeleteAccount }: { busy: boolean; onDeleteAcc
 }
 
 /** Список своих презентаций с удалением — пользователь управляет своими данными */
-export function Library({ items, currentId, busy, onOpen, onDelete, onDeleteAccount }: {
+export function Library({ items, failed = false, onRetry, currentId, busy, onOpen, onDelete, onDeleteAccount }: {
   items: LibraryItem[]
+  /** Последняя загрузка списка не удалась: показанное может быть неполным */
+  failed?: boolean
+  onRetry?: () => void
   currentId: string | null
   busy: boolean
   onOpen: (id: string) => void
@@ -542,6 +569,16 @@ export function Library({ items, currentId, busy, onOpen, onDelete, onDeleteAcco
         </h2>
         <span className="text-[12.5px] text-muted-foreground">Хранятся на сервере, пока вы их не удалите</span>
       </div>
+      {failed && (
+        <p role="status" className="flex flex-wrap items-baseline gap-x-2 text-[13.5px] text-destructive">
+          Не удалось загрузить список презентаций.
+          {onRetry && (
+            <Button variant="link" size="sm" className="h-auto p-0 text-destructive" onClick={onRetry}>
+              Повторить
+            </Button>
+          )}
+        </p>
+      )}
       {items.length ? (
         <ul className="scroll-thin max-h-[320px] overflow-auto">
           {items.map((item) => (
@@ -555,7 +592,7 @@ export function Library({ items, currentId, busy, onOpen, onDelete, onDeleteAcco
             />
           ))}
         </ul>
-      ) : (
+      ) : failed ? null : (
         <p className="text-[13.5px] text-muted-foreground">Пока пусто — созданные презентации появятся здесь.</p>
       )}
       <AccountDeletion busy={busy} onDeleteAccount={onDeleteAccount} />

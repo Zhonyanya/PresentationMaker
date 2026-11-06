@@ -187,8 +187,10 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
             </motion.h1>
 
             <motion.p variants={fadeUp} className="mt-8 max-w-[42ch] text-[17px] leading-[1.65] text-muted-foreground">
-              Вставьте текст выступления — ассистент выстроит структуру и разложит её по слайдам в едином оформлении. Остаётся
-              проверить формулировки и скачать файл.
+              {serverMode
+                ? 'Вставьте текст выступления — ассистент выстроит структуру и разложит её по слайдам в едином оформлении.'
+                : 'Вставьте текст выступления — заголовки, абзацы и списки разложатся по слайдам в едином оформлении.'}{' '}
+              Остаётся проверить формулировки и скачать файл.
             </motion.p>
 
             <motion.div variants={fadeUp} className="mt-10 flex flex-wrap items-center gap-x-8 gap-y-4">
@@ -328,7 +330,7 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
               <h2 id="params-heading" className="sr-only">
                 Объём
               </h2>
-              <SlideCountField value={draft.slideCount} onChange={(slideCount) => setDraft({ slideCount })} />
+              <SlideCountField value={draft.slideCount} onChange={(slideCount) => setDraft({ slideCount })} shortTextNote={serverMode} />
             </motion.section>
 
             <motion.section variants={fadeUp} ref={examplesRef} className="flex flex-col gap-4" aria-labelledby="examples-heading">

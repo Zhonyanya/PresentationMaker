@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Slider } from '@/components/ui/slider'
 import { EASE_OUT_EXPO } from '@/components/app/motion'
 
-export function SlideCountField({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+/** @param shortTextNote Серверный режим: при коротком тексте ML-модуль может вернуть меньше слайдов */
+export function SlideCountField({ value, onChange, shortTextNote = false }: { value: number; onChange: (value: number) => void; shortTextNote?: boolean }) {
   const set = (next: number) => onChange(Math.min(Math.max(next, LIMITS.slideCountMin), LIMITS.slideCountMax))
   return (
     <div className="flex flex-col gap-6">
@@ -51,6 +52,7 @@ export function SlideCountField({ value, onChange }: { value: number; onChange: 
       />
       <p className="text-[13px] leading-relaxed text-muted-foreground">
         Примерно, вместе с титульным и заключительным. Итог зависит от структуры текста.
+        {shortTextNote && ' Если текст короткий, слайдов может получиться меньше: презентация строится только по содержанию доклада.'}
       </p>
     </div>
   )

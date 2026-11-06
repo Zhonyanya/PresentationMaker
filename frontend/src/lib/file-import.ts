@@ -49,8 +49,32 @@ export function decodeText(buffer: ArrayBuffer): string {
     return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
   } catch {
     // Недопустимые для UTF-8 последовательности — почти всегда Windows-1251 из старого Блокнота
-    return new TextDecoder('windows-1251').decode(bytes)
+    const text = new TextDecoder('windows-1251').decode(bytes)
+    if (!looksLikeCyrillic(text)) {
+      throw new FileImportError('Не удалось определить кодировку файла. Сохраните его в UTF-8 и загрузите снова.')
+    }
+    return text
   }
+}
+
+/** Типографские знаки, которые обычно встречаются в русском тексте рядом с буквами */
+const TYPOGRAPHY = new Set('«»–—…№“”„‘’•°\u00a0')
+
+/**
+ * Windows-1251 расшифровывает любые байты, поэтому без проверки чужая кодировка
+ * превратилась бы в «кракозябры» с сообщением об успехе. В русском тексте почти все
+ * символы за пределами ASCII — буквы русского (а также украинского и белорусского)
+ * алфавита или привычная типографика.
+ */
+function looksLikeCyrillic(text: string): boolean {
+  let good = 0
+  let other = 0
+  for (const char of text) {
+    if (char.charCodeAt(0) < 0x80) continue
+    if (/[А-яЁёІіЇїЄєҐґЎў]/.test(char) || TYPOGRAPHY.has(char)) good++
+    else other++
+  }
+  return other <= (good + other) * 0.1
 }
 
 async function readText(file: File): Promise<string> {
