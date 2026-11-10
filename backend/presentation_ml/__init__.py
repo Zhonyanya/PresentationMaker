@@ -7,7 +7,7 @@ from functools import lru_cache
 from app.presentations.schemas import Document, normalize_document, validate_revision
 
 from .capabilities import reject_explicit_structure_change
-from .grounding import attach_source_quotes
+from .grounding import attach_source_quotes, select_source_passages
 from .prompts import build_generation_prompt, build_revision_prompt, get_prompt_version
 from .transport import request_document
 
@@ -27,6 +27,10 @@ def remaining_seconds(deadline):
 
 def _schema(revision=False, slide_count=None, grounded=False, slide_ids=None, frozen_title=None):
     schema = Document.model_json_schema()
+    definitions = schema.get('$defs', {})
+    definitions.get('TextSlide', {}).get('properties', {}).pop('sourceMaterial', None)
+    definitions.pop('SourceTableMaterial', None)
+    definitions.pop('SourceImageMaterial', None)
     # Optional fields must be omitted, never returned as null.
     def clean(node):
         if isinstance(node, dict):
@@ -226,9 +230,13 @@ def _fill_generation_closing(document, *, recap_slides):
     raise ValueError('Generated document has no readable closing recap')
 
 
-def generate(*, text, slideCount, job_id, deadline, title=None):
+def generate(*, text, slideCount, job_id, deadline, title=None, page_passages=None):
     timeout = remaining_seconds(deadline)
     version = get_prompt_version()
+    if page_passages is not None:
+        if version != 'v7' or not page_passages:
+            raise ValueError('PDF generation requires v7 and source passages')
+        text = '\n\n'.join(passage.text for passage in page_passages)
     short_budget = version in ('v3', 'v4', 'v5', 'v6', 'v7') and len(text) < 1000
     target_count = min(slideCount, 4) if short_budget else slideCount
     schema = _schema(grounded=version == 'v7')
@@ -244,6 +252,12 @@ def generate(*, text, slideCount, job_id, deadline, title=None):
                 sections.append(lines[0])
         if sections:
             payload['source_sections'] = sections[:32]
+    if page_passages is not None:
+        payload['source_passages'] = [
+            {'page': passage.page_number, 'text': passage.text} for passage in page_passages
+        ]
+    elif version == 'v7':
+        payload['source_passages'] = select_source_passages(text)
     if title is not None:
         payload["title"] = title
     result = request_document(
@@ -252,7 +266,7 @@ def generate(*, text, slideCount, job_id, deadline, title=None):
     )
     remaining_seconds(deadline)
     if version == 'v7':
-        result = attach_source_quotes(result, text)
+        result = attach_source_quotes(result, text, page_passages=page_passages)
     normalized = _join_generation_headings(_normalize(result, True))
     recap_slides = normalized['slides'][1:-1]
     if short_budget:

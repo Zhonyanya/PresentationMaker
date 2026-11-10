@@ -70,3 +70,18 @@ describe('экспорт в PPTX', () => {
     expect(await slideXml(zip, 4)).toContain('Символвнутри')
   })
 })
+
+it('exports a source table as native PowerPoint cells', async () => {
+  const pptx = await buildPptx({
+    title: 'Доклад',
+    slides: [{
+      id: 'table-1', layout: 'text', title: 'Таблица', body: '',
+      sourceMaterial: { kind: 'table', page: 8, rows: [['Школа', 'Участники'], ['А', '23']] },
+    }],
+  })
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const xml = await slideXml(zip, 1)
+  expect(xml).toContain('<a:tbl>')
+  expect(xml).toContain('<a:t>Участники</a:t>')
+  expect(xml).toContain('<a:t>23</a:t>')
+})

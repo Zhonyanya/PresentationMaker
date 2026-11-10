@@ -1,9 +1,11 @@
 """HTTP-доступ к текущему документу, фоновым изменениям и статусу задания."""
 
+from io import BytesIO
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Request
+import anyio
+from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy import select
 
 from app.auth.service import DB, CurrentUser, authenticated_csrf_guard, rate_limit
@@ -49,12 +51,40 @@ async def enqueue(db, user, key, body, identifier=None):
         AppError: Если сервис отклонил приём задания.
     """
     job = await submit(db, user.id, key, body, identifier)
-    import anyio
-
     from app.worker import dispatch_job
 
     await anyio.to_thread.run_sync(dispatch_job, job.id)
     return accepted(job)
+
+
+pdf_import_slots = anyio.CapacityLimiter(2)
+
+
+@router.post("/presentations/pdf-preview", dependencies=WRITE)
+async def pdf_preview(
+    request: Request,
+    user: CurrentUser,
+    title: Annotated[str, Query(min_length=1, max_length=200)] = "Доклад",
+    slide_count: Annotated[int, Query(ge=3, le=20)] = 10,
+):
+    """Build a temporary presentation from a PDF supplied by the signed-in user."""
+    from pdfminer.pdfexceptions import PDFException
+
+    from app.presentations.pdf_document import build_pdf_document
+
+    data = await request.body()
+    if not data.startswith(b"%PDF-"):
+        raise AppError(422, "INVALID_PDF", "Загрузите PDF-документ.")
+    try:
+        pdf_import_slots.acquire_nowait()
+    except anyio.WouldBlock:
+        raise AppError(503, "PDF_BUSY", "Импорт занят. Повторите позже.") from None
+    try:
+        return await anyio.to_thread.run_sync(build_pdf_document, BytesIO(data), title, slide_count)
+    except (PDFException, ValueError, OSError):
+        raise AppError(422, "INVALID_PDF", "Не удалось обработать PDF-документ.") from None
+    finally:
+        pdf_import_slots.release()
 
 
 @router.post("/presentations", status_code=202, dependencies=WRITE)

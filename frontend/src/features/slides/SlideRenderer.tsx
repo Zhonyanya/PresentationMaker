@@ -134,6 +134,28 @@ export const SlideRenderer = memo(function SlideRenderer({
           if (element.type === 'rect') return <div key={index} style={{ ...boxStyle(element), background: element.fill }} />
           if (element.type === 'image')
             return <img key={index} src={element.src} alt="" style={{ ...boxStyle(element), objectFit: 'contain', objectPosition: 'right center' }} />
+          if (element.type === 'table') {
+            return (
+              <table key={index} style={{
+                ...boxStyle(element),
+                borderCollapse: 'collapse',
+                tableLayout: 'fixed',
+                fontSize: `${element.fontSize}pt`,
+              }}>
+                <tbody>
+                  {element.rows.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {row.map((cell, columnIndex) => (
+                        <td key={columnIndex} style={{ border: '1px solid #cbd5e1', overflowWrap: 'anywhere' }}>
+                          {cell}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )
+          }
           return (
             <TextElement
               key={index}

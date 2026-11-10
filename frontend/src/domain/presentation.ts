@@ -41,11 +41,25 @@ export const titleSlideSchema = z.object({
   caption: optionalText(200),
 })
 
+const sourceMaterialSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('table'),
+    page: z.number().int().min(1).max(250),
+    rows: z.array(z.array(text(300)).min(2).max(8)).min(2).max(10),
+  }),
+  z.object({
+    kind: z.literal('image'),
+    page: z.number().int().min(1).max(250),
+    png: z.string().max(1_500_000).regex(/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/),
+  }),
+])
+
 export const textSlideSchema = z.object({
   ...slideBase,
   layout: z.literal('text'),
   title: text(LIMITS.titleMax),
   body: text(4000),
+  sourceMaterial: sourceMaterialSchema.optional(),
 })
 
 export const bulletsSlideSchema = z.object({

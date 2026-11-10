@@ -21,6 +21,19 @@ export const textLayout: LayoutDefinition<'text'> = {
   toContent: (slide) => ({ title: slide.title, items: paragraphsOf(slide.body) }),
   buildScene: (slide, ctx) => {
     const { colors, typography, fonts } = ctx.theme
+    const material = slide.sourceMaterial
+    if (material) {
+      const box = contentBox(ctx)
+      return {
+        background: colors.background,
+        elements: [
+          ...contentChrome(slide.title || `Страница ${material.page}`, ctx),
+          material.kind === 'table'
+            ? { type: 'table', box, rows: material.rows, fontSize: 14 }
+            : { type: 'image', box, src: material.png },
+        ],
+      }
+    }
     return {
       background: colors.background,
       elements: [

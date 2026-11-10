@@ -63,7 +63,14 @@ export interface SceneImage {
   src: string
 }
 
-export type SceneElement = SceneRect | SceneText | SceneImage
+export interface SceneTable {
+  type: 'table'
+  box: Box
+  rows: string[][]
+  fontSize: number
+}
+
+export type SceneElement = SceneRect | SceneText | SceneImage | SceneTable
 
 export interface SlideScene {
   background: string

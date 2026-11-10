@@ -9,6 +9,7 @@ import { useFlowStore } from '@/store/flow-store'
 import { safeStorage } from '@/lib/storage'
 import { usePresentationScenes } from '@/hooks/usePresentationScenes'
 import { CreatePage } from '@/features/create/CreatePage'
+import { PdfImportPanel } from './PdfImportPanel'
 import { ReadyCurtain } from '@/features/generation/ReadyCurtain'
 import { AuthScreen, SessionCheck, type AuthKind } from './AuthScreen'
 import { AccountControls, InfoNote, JobWaiting, Library, Notice, PausedJob, ServerEditor, type JobKind } from './ServerWorkspace'
@@ -489,6 +490,7 @@ function Workspace() {
         notice={<>
           {notice}
           {job && <PausedJob phase={phase} onResume={resumeWaiting} />}
+          {!job && <PdfImportPanel preview={api.previewPdf} />}
           <Library items={library} failed={libraryFailed} onRetry={() => void refreshLibrary()} currentId={current?.presentation_id ?? null} busy={busy || Boolean(job)}
             onOpen={(id) => void openPresentation(id)} onDelete={(id) => void deletePresentation(id)} onDeleteAccount={deleteAccount} />
         </>}

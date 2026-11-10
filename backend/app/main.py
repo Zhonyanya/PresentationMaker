@@ -255,6 +255,10 @@ class BodyLimitMiddleware:
         if scope.get("path") == "/api/v1/health/live":
             return await self.app(scope, receive, send)
         client = (scope.get("client") or ("unknown", 0))[0]
+        limit = 10_000_000 if (
+            scope.get('method') == 'POST'
+            and scope.get('path') == '/api/v1/presentations/pdf-preview'
+        ) else self.limit
 
         async def reject(status, code, message):
             request_id = secrets.token_hex(12)
@@ -290,7 +294,7 @@ class BodyLimitMiddleware:
                         if message["type"] == "http.disconnect":
                             return
                         chunk = message.get("body", b"")
-                        if len(body) + len(chunk) > self.limit:
+                        if len(body) + len(chunk) > limit:
                             too_large = True
                             break
                         body.extend(chunk)

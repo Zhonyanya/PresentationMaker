@@ -30,12 +30,12 @@ export function createServerApi(config: { baseUrl: string; fetch?: typeof fetch;
   let csrfToken: string | null = null
   let identity = 0
 
-  async function request<T>(path: string, schema: z.ZodType<T>, init: RequestInit = {}): Promise<T> {
+  async function request<T>(path: string, schema: z.ZodType<T>, init: RequestInit = {}, timeoutMs = config.requestTimeoutMs ?? 20000): Promise<T> {
     const controller = new AbortController()
     const abort = () => controller.abort()
     init.signal?.addEventListener('abort', abort, { once: true })
     if (init.signal?.aborted) controller.abort()
-    const timeout = setTimeout(abort, config.requestTimeoutMs ?? 20000)
+    const timeout = setTimeout(abort, timeoutMs)
     const epoch = identity
     try {
       const response = await doFetch(`${config.baseUrl}/api/v1${path}`, {
@@ -130,6 +130,16 @@ export function createServerApi(config: { baseUrl: string; fetch?: typeof fetch;
     async logout() { await post('/auth/logout', {}, z.null()); csrfToken = null },
     current(id: string, signal?: AbortSignal) { return request(`/presentations/${encodeURIComponent(id)}`, currentSchema, { signal }) },
     status(id: string, signal?: AbortSignal) { return request(`/jobs/${encodeURIComponent(id)}`, statusSchema, { signal }) },
+    async previewPdf(file: File, signal?: AbortSignal) {
+      if (!csrfToken) await csrf()
+      const title = file.name.replace(/\.pdf$/i, '').trim().slice(0, 200) || 'Доклад'
+      return request(`/presentations/pdf-preview?${new URLSearchParams({ title })}`, presentationSchema, {
+        method: 'POST',
+        body: file,
+        signal,
+        headers: { 'Content-Type': 'application/pdf', 'X-CSRF-Token': csrfToken! },
+      }, 180_000)
+    },
     async generate(body: GenerateRequest, key: string, signal?: AbortSignal, current?: CurrentPresentation) {
       const parsed = generateRequestSchema.safeParse(body)
       if (!parsed.success) throw new ApiError('validation', { message: parsed.error.issues[0]?.message })

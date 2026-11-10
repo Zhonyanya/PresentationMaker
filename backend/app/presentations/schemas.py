@@ -84,9 +84,42 @@ class TitleSlide(SlideBase):
     caption: text(200) | None = None
 
 
+class SourceTableMaterial(Contract):
+    kind: Literal["table"]
+    page: Annotated[int, Field(ge=1, le=250)]
+    rows: Annotated[
+        list[Annotated[list[text(300)], Field(min_length=2, max_length=8)]],
+        Field(min_length=2, max_length=10),
+    ]
+
+    @model_validator(mode="after")
+    def rectangular(self):
+        if any(len(row) != len(self.rows[0]) for row in self.rows):
+            raise ValueError("Table rows must have the same number of cells")
+        return self
+
+
+class SourceImageMaterial(Contract):
+    kind: Literal["image"]
+    page: Annotated[int, Field(ge=1, le=250)]
+    png: Annotated[
+        str,
+        StringConstraints(
+            max_length=1500000,
+            pattern=r"^data:image/png;base64,[A-Za-z0-9+/]+={0,2}$",
+        ),
+    ]
+
+
+SourceMaterial = Annotated[
+    SourceTableMaterial | SourceImageMaterial, Field(discriminator="kind"),
+]
+
+
 class TextSlide(SlideBase):
     layout: Literal["text"]
     body: text(4000)
+    sourceMaterial: SourceMaterial | None = None
 
 
 Items = Annotated[list[text(1000)], Field(max_length=12)]
