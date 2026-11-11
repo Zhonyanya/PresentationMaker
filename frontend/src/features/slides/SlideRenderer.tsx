@@ -141,12 +141,19 @@ export const SlideRenderer = memo(function SlideRenderer({
                 borderCollapse: 'collapse',
                 tableLayout: 'fixed',
                 fontSize: `${element.fontSize}pt`,
+                fontFamily: `'${element.fontFace}', ${presentationTheme.fonts.cssFallback}`,
+                lineHeight: LINE_HEIGHT_FACTOR,
               }}>
                 <tbody>
                   {element.rows.map((row, rowIndex) => (
-                    <tr key={rowIndex}>
+                    <tr key={rowIndex} style={{ height: px(element.rowHeights[rowIndex]) }}>
                       {row.map((cell, columnIndex) => (
-                        <td key={columnIndex} style={{ border: '1px solid #cbd5e1', overflowWrap: 'anywhere' }}>
+                        <td key={columnIndex} style={{
+                          border: '1px solid #cbd5e1',
+                          overflowWrap: 'anywhere',
+                          padding: `${element.padding}pt`,
+                          whiteSpace: 'pre-wrap',
+                        }}>
                           {cell}
                         </td>
                       ))}

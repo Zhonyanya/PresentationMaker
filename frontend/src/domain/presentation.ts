@@ -44,12 +44,12 @@ export const titleSlideSchema = z.object({
 const sourceMaterialSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('table'),
-    page: z.number().int().min(1).max(250),
+    page: z.number().int().min(1).max(250).optional(),
     rows: z.array(z.array(text(300)).min(2).max(8)).min(2).max(10),
   }),
   z.object({
     kind: z.literal('image'),
-    page: z.number().int().min(1).max(250),
+    page: z.number().int().min(1).max(250).optional(),
     png: z.string().max(1_500_000).regex(/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/),
   }),
 ])

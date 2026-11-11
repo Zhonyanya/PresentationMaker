@@ -3,7 +3,7 @@
 from typing import BinaryIO
 from uuid import uuid4
 
-from app.presentations.pdf_source import read_pdf, source_material_slide
+from app.presentations.pdf_source import read_pdf, source_material_slide, source_table_slides
 from app.presentations.schemas import Document
 from presentation_ml.grounding import select_page_passages
 
@@ -27,12 +27,19 @@ def build_pdf_document(source: BinaryIO, title: str, slide_count: int) -> dict:
     # Alternate material types so a table-heavy report can still show illustrations.
     for index in range(max(len(tables), len(images))):
         if index < len(tables):
-            selected.append(('table', *tables[index]))
-        if index < len(images):
-            selected.append(images[index])
+            page, table_index = tables[index]
+            slots = material_budget - len(selected)
+            table_slots = max(1, slots - (index < len(images)))
+            selected.extend(
+                (page.number, slide)
+                for slide in source_table_slides(source, page, table_index, table_slots)
+            )
+        if index < len(images) and len(selected) < material_budget:
+            kind, page, image_index = images[index]
+            slide = source_material_slide(source, page, **{f'{kind}_index': image_index})
+            selected.append((page.number, slide))
         if len(selected) >= material_budget:
             break
-    selected = selected[:material_budget]
     excerpts = select_page_passages(
         ((page.number, page.text) for page in pages), limit=available - len(selected),
     )
@@ -46,9 +53,7 @@ def build_pdf_document(source: BinaryIO, title: str, slide_count: int) -> dict:
         })
         for p in excerpts
     ]
-    for kind, page, index in selected:
-        kwargs = {f'{kind}_index': index}
-        content.append((page.number, source_material_slide(source, page, **kwargs)))
+    content.extend(selected)
     if not content:
         raise ValueError('PDF has no extractable content')
     content.sort(key=lambda item: item[0])

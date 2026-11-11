@@ -100,6 +100,27 @@ class PagePassage:
     text: str
 
 
+_REPORT_OUTCOME = re.compile(
+    r'\b(?:по итогам|в результате|результат[ыо]м?|вывод[ыа]?|'
+    r'составил[аио]?|вырос(?:ла|ло|ли)?|снизил(?:ся|ась|ось|ись)|'
+    r'увеличил(?:ся|ась|ось|ись)|достиг(?:нут[аоы]?|ла|ли)?)\b',
+    re.IGNORECASE,
+)
+_LEGAL_REFERENCE = re.compile(
+    r'^(?:в соответствии с|на основании|во исполнение)\b|'
+    r'\b(?:постановление|приказ|распоряжение|федеральный закон)\b.*?№',
+    re.IGNORECASE,
+)
+
+
+def _report_passage_score(text: str) -> tuple[bool, bool, int]:
+    without_dates = _ENTITY_PATTERN.sub(
+        lambda match: '' if match.lastgroup == 'date' else match.group(), text,
+    )
+    numbers = set(re.findall(r'\b\d+(?:[.,]\d+)?', without_dates))
+    return bool(_REPORT_OUTCOME.search(text)), not _LEGAL_REFERENCE.search(text), len(numbers)
+
+
 def select_page_passages(
     pages: Iterable[tuple[int, str]], *, limit: int = 12,
 ) -> list[PagePassage]:
@@ -123,7 +144,7 @@ def select_page_passages(
     return [
         max(
             passages[index * len(passages) // limit:(index + 1) * len(passages) // limit],
-            key=lambda passage: _passage_score(passage.text),
+            key=lambda passage: _report_passage_score(passage.text),
         )
         for index in range(limit)
     ]

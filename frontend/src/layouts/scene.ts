@@ -68,6 +68,9 @@ export interface SceneTable {
   box: Box
   rows: string[][]
   fontSize: number
+  fontFace: string
+  padding: number
+  rowHeights: number[]
 }
 
 export type SceneElement = SceneRect | SceneText | SceneImage | SceneTable

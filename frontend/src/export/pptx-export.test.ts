@@ -85,3 +85,43 @@ it('exports a source table as native PowerPoint cells', async () => {
   expect(xml).toContain('<a:t>Участники</a:t>')
   expect(xml).toContain('<a:t>23</a:t>')
 })
+
+it('preserves the aspect ratio of a portrait PNG crop', async () => {
+  const pptx = await buildPptx({
+    title: 'Доклад',
+    slides: [{
+      id: 'image-1', layout: 'text', title: 'Иллюстрация', body: 'Охват вырос на 9 процентных пунктов.',
+      sourceMaterial: {
+        kind: 'image',
+        page: 1,
+        // A 1 × 2 PNG.
+        png: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAACCAIAAAAW4yFwAAAADElEQVR4nGNggAMAAAgAAf0HtVgAAAAASUVORK5CYII=',
+      },
+    }],
+  })
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const xml = await slideXml(zip, 1)
+  const picture = xml.match(/<p:pic>.*?<\/p:pic>/s)?.[0]
+  const [, width, height] = picture?.match(/<a:ext cx="(\d+)" cy="(\d+)"/) ?? []
+  expect(Number(width) / Number(height)).toBeCloseTo(0.5)
+  expect(xml).toContain('<a:t>Охват вырос на 9 процентных пунктов.</a:t>')
+})
+
+it('allocates more height to rows with multiline PDF cells', async () => {
+  const pptx = await buildPptx({
+    title: 'Доклад',
+    slides: [{
+      id: 'table-1', layout: 'text', title: 'Таблица', body: '',
+      sourceMaterial: {
+        kind: 'table', page: 1,
+        rows: [['Показатель', 'Значение'], ['Первая строка\nВторая строка\nТретья строка', '23']],
+      },
+    }],
+  })
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const xml = await slideXml(zip, 1)
+  const heights = Array.from(xml.matchAll(/<a:tr h="(\d+)"/g), (match) => Number(match[1]))
+  expect(heights).toHaveLength(2)
+  expect(heights[1]).toBeGreaterThan(heights[0])
+  expect(heights[0] + heights[1]).toBeLessThanOrEqual(4.65 * 914400)
+})

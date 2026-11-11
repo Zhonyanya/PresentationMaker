@@ -82,7 +82,7 @@ async function readText(file: File): Promise<string> {
 }
 
 /** Отклоняет DOCX, который при распаковке займёт слишком много памяти. */
-async function assertUnpackedSize(buffer: ArrayBuffer) {
+async function assertUnpackedSize(buffer: ArrayBuffer, includeMedia = false) {
   const JSZip = (await import('jszip')).default
   let zip: InstanceType<typeof JSZip>
   try {
@@ -92,7 +92,8 @@ async function assertUnpackedSize(buffer: ArrayBuffer) {
   }
   const tooLarge = () => new FileImportError('Документ слишком большой после распаковки. Вставьте нужный фрагмент текста вручную.')
   // Картинки не распаковываются: текст из них не нужен
-  const entries = Object.values(zip.files).filter((entry) => !entry.dir && !entry.name.startsWith('word/media/'))
+  const entries = Object.values(zip.files).filter((entry) => !entry.dir
+    && (includeMedia || !entry.name.startsWith('word/media/')))
   // Быстрая проверка по размерам из заголовков архива
   let declared = 0
   for (const entry of entries) declared += (entry as unknown as { _data?: { uncompressedSize?: number } })._data?.uncompressedSize ?? 0
@@ -148,6 +149,26 @@ async function readDocx(file: File): Promise<string> {
     return htmlToStructuredText(html)
   } catch (error) {
     console.error('[file-import] DOCX', error)
+    throw new FileImportError(UNREADABLE)
+  }
+}
+
+/** Reads images and tables for presentation import while retaining the archive size checks. */
+export async function readDocxHtml(file: File, convertImage: (image: {
+  contentType: string
+  readAsBase64String(): Promise<string>
+}) => Promise<{ src: string }>): Promise<string> {
+  if (file.size > MAX_FILE_SIZE) throw new FileImportError('Файл больше 10 МБ.')
+  const buffer = await file.arrayBuffer()
+  await assertUnpackedSize(buffer, true)
+  try {
+    const mammoth = await import('mammoth')
+    const { value } = await mammoth.convertToHtml(
+      { arrayBuffer: buffer },
+      { convertImage: mammoth.images.imgElement(convertImage) },
+    )
+    return value
+  } catch {
     throw new FileImportError(UNREADABLE)
   }
 }

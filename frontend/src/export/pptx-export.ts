@@ -66,9 +66,10 @@ function addElement(pptx: PptxGenJS, slide: PptxSlide, element: SceneElement) {
       break
     case 'image':
       slide.addImage({
-        ...(element.src.startsWith('data:image/png;base64,') ? { data: element.src } : { path: element.src }),
         ...element.box,
-        sizing: { type: 'contain', w: element.box.w, h: element.box.h },
+        ...(element.src.startsWith('data:image/png;base64,')
+          ? { data: element.src }
+          : { path: element.src, sizing: { type: 'contain', w: element.box.w, h: element.box.h } }),
       })
       break
     case 'table':
@@ -76,6 +77,9 @@ function addElement(pptx: PptxGenJS, slide: PptxSlide, element: SceneElement) {
         ...element.box,
         autoPage: false,
         fontSize: element.fontSize,
+        fontFace: element.fontFace,
+        margin: element.padding,
+        rowH: element.rowHeights,
         border: { type: 'solid', color: 'CBD5E1', pt: 1 },
         valign: 'middle',
       })
