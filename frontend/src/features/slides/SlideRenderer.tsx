@@ -3,6 +3,7 @@ import type { SceneElement, SceneText, SlideScene } from '@/layouts/scene'
 import { LINE_HEIGHT_FACTOR } from '@/layouts/text-fit'
 import { presentationTheme } from '@/theme/presentation-theme'
 import { cn } from '@/lib/utils'
+import { visibleTableCells } from '@/layouts/source-material'
 
 /** 1 дюйм слайда = 96 px превью. Слайд 13.333″ × 7.5″ → 1280 × 720 px. */
 export const PX_PER_INCH = 96
@@ -144,17 +145,20 @@ export const SlideRenderer = memo(function SlideRenderer({
                 fontFamily: `'${element.fontFace}', ${presentationTheme.fonts.cssFallback}`,
                 lineHeight: LINE_HEIGHT_FACTOR,
               }}>
+                <colgroup>{element.rows[0].map((_, column) => (
+                  <col key={column} style={{ width: `${100 / element.rows[0].length}%` }} />
+                ))}</colgroup>
                 <tbody>
-                  {element.rows.map((row, rowIndex) => (
+                  {visibleTableCells(element.rows, element.merges).map((row, rowIndex) => (
                     <tr key={rowIndex} style={{ height: px(element.rowHeights[rowIndex]) }}>
-                      {row.map((cell, columnIndex) => (
-                        <td key={columnIndex} style={{
+                      {row.map((cell) => (
+                        <td key={cell.column} rowSpan={cell.rowspan} colSpan={cell.colspan} style={{
                           border: '1px solid #cbd5e1',
                           overflowWrap: 'anywhere',
                           padding: `${element.padding}pt`,
                           whiteSpace: 'pre-wrap',
                         }}>
-                          {cell}
+                          {cell.text}
                         </td>
                       ))}
                     </tr>

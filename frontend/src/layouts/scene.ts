@@ -67,10 +67,18 @@ export interface SceneTable {
   type: 'table'
   box: Box
   rows: string[][]
+  merges?: TableMerge[]
   fontSize: number
   fontFace: string
   padding: number
   rowHeights: number[]
+}
+
+export interface TableMerge {
+  row: number
+  column: number
+  rowspan: number
+  colspan: number
 }
 
 export type SceneElement = SceneRect | SceneText | SceneImage | SceneTable

@@ -130,10 +130,12 @@ export function createServerApi(config: { baseUrl: string; fetch?: typeof fetch;
     async logout() { await post('/auth/logout', {}, z.null()); csrfToken = null },
     current(id: string, signal?: AbortSignal) { return request(`/presentations/${encodeURIComponent(id)}`, currentSchema, { signal }) },
     status(id: string, signal?: AbortSignal) { return request(`/jobs/${encodeURIComponent(id)}`, statusSchema, { signal }) },
-    async previewPdf(file: File, signal?: AbortSignal) {
+    async previewPdf(file: File, signal?: AbortSignal, compare = false) {
       if (!csrfToken) await csrf()
       const title = file.name.replace(/\.pdf$/i, '').trim().slice(0, 200) || 'Доклад'
-      return request(`/presentations/pdf-preview?${new URLSearchParams({ title })}`, presentationSchema, {
+      const query = new URLSearchParams({ title })
+      if (compare) query.set('compare', 'true')
+      return request(`/presentations/pdf-preview?${query}`, presentationSchema, {
         method: 'POST',
         body: file,
         signal,

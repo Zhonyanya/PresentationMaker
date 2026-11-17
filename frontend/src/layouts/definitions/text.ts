@@ -43,7 +43,7 @@ export const textLayout: LayoutDefinition<'text'> = {
             },
           })] : []),
           material.kind === 'table'
-            ? sourceTable(material.rows, box, fonts.body, typography.absoluteMinFontSize)
+            ? sourceTable(material.rows, box, fonts.body, typography.absoluteMinFontSize, material.merges)
             : { type: 'image', box: sourceImageBox(material.png, imageBox), src: material.png },
         ],
       }

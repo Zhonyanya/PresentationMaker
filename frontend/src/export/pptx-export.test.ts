@@ -86,6 +86,29 @@ it('exports a source table as native PowerPoint cells', async () => {
   expect(xml).toContain('<a:t>23</a:t>')
 })
 
+it('exports both axes of a merged source cell as an editable PowerPoint grid', async () => {
+  const pptx = await buildPptx({
+    title: 'Доклад',
+    slides: [{
+      id: 'merged-table', layout: 'text', title: 'Таблица', body: '',
+      sourceMaterial: {
+        kind: 'table',
+        rows: [['Общий показатель', '', 'Год'], ['', '', '2025'], ['А', 'Б', '2026']],
+        merges: [{ row: 0, column: 0, rowspan: 2, colspan: 2 }],
+      },
+    }],
+  })
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const xml = await slideXml(zip, 1)
+  expect(xml.match(/<a:gridCol /g)).toHaveLength(3)
+  const rows = [...xml.matchAll(/<a:tr h="\d+">.*?<\/a:tr>/gs)].map(([row]) => row)
+  expect(rows).toHaveLength(3)
+  for (const row of rows) expect(row.match(/<a:tc[ >]/g)).toHaveLength(3)
+  expect(rows[0]).toContain('<a:tc rowSpan="2" gridSpan="2">')
+  expect(rows[1]).toContain('vMerge="1" hMerge="1"')
+  expect(rows[1]).toContain('<a:t>2025</a:t>')
+})
+
 it('preserves the aspect ratio of a portrait PNG crop', async () => {
   const pptx = await buildPptx({
     title: 'Доклад',

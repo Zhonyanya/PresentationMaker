@@ -46,7 +46,29 @@ const sourceMaterialSchema = z.discriminatedUnion('kind', [
     kind: z.literal('table'),
     page: z.number().int().min(1).max(250).optional(),
     rows: z.array(z.array(text(300)).min(2).max(8)).min(2).max(10),
-  }),
+    merges: z.array(z.object({
+      row: z.number().int().min(0).max(9),
+      column: z.number().int().min(0).max(7),
+      rowspan: z.number().int().min(1).max(10),
+      colspan: z.number().int().min(1).max(8),
+    })).max(40).optional(),
+  }).refine(({ rows, merges }) => {
+    if (!merges?.length) return true
+    const width = rows[0]?.length ?? 0
+    if (rows.some((row) => row.length !== width)) return false
+    const occupied = new Set<number>()
+    for (const { row, column, rowspan, colspan } of merges) {
+      if (row + rowspan > rows.length || column + colspan > width) return false
+      for (let r = row; r < row + rowspan; r += 1) {
+        for (let c = column; c < column + colspan; c += 1) {
+          const index = r * width + c
+          if (occupied.has(index) || ((r !== row || c !== column) && rows[r][c] !== '')) return false
+          occupied.add(index)
+        }
+      }
+    }
+    return true
+  }, { message: 'Некорректное объединение ячеек таблицы', path: ['merges'] }),
   z.object({
     kind: z.literal('image'),
     page: z.number().int().min(1).max(250).optional(),

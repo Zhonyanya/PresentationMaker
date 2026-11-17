@@ -15,6 +15,7 @@ import pdfplumber
 class SourceTable:
     bounds: tuple[float, float, float, float]
     rows: tuple[tuple[str | None, ...], ...]
+    number: str | None = None
 
     @property
     def has_tabular_content(self) -> bool:
@@ -116,6 +117,17 @@ _CAPTION = re.compile(
     r'^[ \t]*((?:диаграмма|рисунок|рис\.|схема|график)[ \t]*(?:№[ \t]*)?\d+)\b[^\n]*',
     re.I | re.M,
 )
+_TABLE_CAPTION = re.compile(r'^[ \t]*таблица[ \t]*(?:№[ \t]*)?(\d+)\b', re.I | re.M)
+
+
+def _table_number(page, bounds):
+    _, top, _, _ = bounds
+    left, page_top, right, _ = page.bbox
+    above = max(page_top, top - 60)
+    if above >= top:
+        return None
+    matches = page.crop((left, above, right, top)).search(_TABLE_CAPTION, return_chars=False)
+    return _TABLE_CAPTION.match(matches[-1]['text'])[1] if matches else None
 
 
 def _captioned_figure(page, frame):
@@ -200,7 +212,10 @@ def read_pdf(source: BinaryIO, *, max_pages: int = 250) -> tuple[SourcePage, ...
                 for table in page.find_tables()
                 if len(table.rows) >= 2 and len(table.columns) >= 2
             )
-            tables = tuple(table for table in candidates if table.has_tabular_content)
+            tables = tuple(
+                replace(table, number=_table_number(page, table.bounds))
+                for table in candidates if table.has_tabular_content
+            )
             figures, images = _page_illustrations(page, seen_images)
             excluded = (*[table.bounds for table in tables], *(figure.bounds for figure in figures))
             prose = page.filter(

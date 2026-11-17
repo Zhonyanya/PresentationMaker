@@ -66,6 +66,7 @@ async def pdf_preview(
     user: CurrentUser,
     title: Annotated[str, Query(min_length=1, max_length=200)] = "Доклад",
     slide_count: Annotated[int, Query(ge=3, le=20)] = 10,
+    compare: bool = False,
 ):
     """Build a temporary presentation from a PDF supplied by the signed-in user."""
     from pdfminer.pdfexceptions import PDFException
@@ -80,6 +81,13 @@ async def pdf_preview(
     except anyio.WouldBlock:
         raise AppError(503, "PDF_BUSY", "Импорт занят. Повторите позже.") from None
     try:
+        if compare:
+            from app.presentations.source_preview import generate_pdf_comparisons
+
+            document = await anyio.to_thread.run_sync(
+                generate_pdf_comparisons, BytesIO(data), title, slide_count,
+            )
+            return document.model_dump(exclude_none=True)
         return await anyio.to_thread.run_sync(build_pdf_document, BytesIO(data), title, slide_count)
     except (PDFException, ValueError, OSError):
         raise AppError(422, "INVALID_PDF", "Не удалось обработать PDF-документ.") from None

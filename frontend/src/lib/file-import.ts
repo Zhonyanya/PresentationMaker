@@ -165,7 +165,15 @@ export async function readDocxHtml(file: File, convertImage: (image: {
     const mammoth = await import('mammoth')
     const { value } = await mammoth.convertToHtml(
       { arrayBuffer: buffer },
-      { convertImage: mammoth.images.imgElement(convertImage) },
+      {
+        convertImage: mammoth.images.imgElement(convertImage),
+        includeEmbeddedStyleMap: false,
+        styleMap: [
+          "p[style-name='Caption'] => p.docx-caption:fresh",
+          "p[style-name='Подпись'] => p.docx-caption:fresh",
+          "p.Caption => p.docx-caption:fresh",
+        ],
+      },
     )
     return value
   } catch {

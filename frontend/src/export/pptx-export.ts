@@ -2,6 +2,7 @@ import type PptxGenJS from 'pptxgenjs'
 import type { Presentation } from '@/domain/presentation'
 import { buildPresentationScenes } from '@/layouts/registry'
 import type { SceneElement, SceneText } from '@/layouts/scene'
+import { visibleTableCells } from '@/layouts/source-material'
 import { presentationTheme, type PresentationTheme } from '@/theme/presentation-theme'
 import { sanitizeText } from '@/lib/text'
 
@@ -72,9 +73,14 @@ function addElement(pptx: PptxGenJS, slide: PptxSlide, element: SceneElement) {
           : { path: element.src, sizing: { type: 'contain', w: element.box.w, h: element.box.h } }),
       })
       break
-    case 'table':
-      slide.addTable(element.rows.map((row) => row.map((cell) => ({ text: sanitizeText(cell) }))), {
-        ...element.box,
+    case 'table': {
+      const { w, ...position } = element.box
+      slide.addTable(visibleTableCells(element.rows, element.merges).map((row) => row.map((cell) => ({
+        text: sanitizeText(cell.text),
+        options: { rowspan: cell.rowspan, colspan: cell.colspan },
+      }))), {
+        ...position,
+        colW: element.rows[0].map(() => w / element.rows[0].length),
         autoPage: false,
         fontSize: element.fontSize,
         fontFace: element.fontFace,
@@ -84,6 +90,7 @@ function addElement(pptx: PptxGenJS, slide: PptxSlide, element: SceneElement) {
         valign: 'middle',
       })
       break
+    }
     case 'text':
       addText(slide, element)
       break
