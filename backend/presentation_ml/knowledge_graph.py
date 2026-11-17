@@ -96,7 +96,7 @@ def _sentences(pages: Iterable[tuple[int | None, str]]) -> Iterable[tuple[int | 
     for page, text in pages:
         if page is not None:
             first_line, separator, remaining = text.lstrip().partition('\n')
-            if separator and first_line.strip() == str(page):
+            if separator and re.fullmatch(r'\d{1,4}', first_line.strip()):
                 text = remaining
         for paragraph in re.split(r'\n\s*\n', text):
             for sentence in _SENTENCES.split(' '.join(paragraph.split())):

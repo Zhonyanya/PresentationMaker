@@ -26,7 +26,7 @@ export const textLayout: LayoutDefinition<'text'> = {
     if (material) {
       const box = contentBox(ctx)
       const context = material.kind === 'image' ? lines(slide.body) : []
-      const contextHeight = context.length ? 0.68 : 0
+      const contextHeight = context.length > 1 ? 1 : context.length ? 0.68 : 0
       const imageBox = { ...box, y: box.y + contextHeight, h: box.h - contextHeight }
       return {
         background: colors.background,
