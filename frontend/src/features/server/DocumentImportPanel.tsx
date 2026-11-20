@@ -10,12 +10,11 @@ import { FileImportError } from '@/lib/file-import'
 import { presentationTheme } from '@/theme/presentation-theme'
 
 export function DocumentImportPanel({ preview }: {
-  preview: (file: File, signal: AbortSignal, compare?: boolean) => Promise<Presentation>
+  preview: (file: File, signal: AbortSignal) => Promise<Presentation>
 }) {
   const [document, setDocument] = useState<Presentation | null>(null)
   const [selected, setSelected] = useState(0)
   const [busy, setBusy] = useState(false)
-  const [compare, setCompare] = useState(false)
   const [error, setError] = useState('')
   const [warnings, setWarnings] = useState<string[]>([])
   const [exportOpen, setExportOpen] = useState(false)
@@ -28,10 +27,6 @@ export function DocumentImportPanel({ preview }: {
 
   async function importDocument(file: File) {
     const docx = file.name.toLowerCase().endsWith('.docx')
-    if (docx && compare) {
-      setError('Для генерации сравнений загрузите PDF.')
-      return
-    }
     if (!docx && file.size > 10_000_000) {
       setError('PDF больше 10 МБ.')
       return
@@ -44,7 +39,7 @@ export function DocumentImportPanel({ preview }: {
     try {
       const result = docx
         ? await importDocxPresentation(file)
-        : { presentation: await preview(file, controller.signal, compare), warnings: [] }
+        : { presentation: await preview(file, controller.signal), warnings: [] }
       if (controller.signal.aborted) return
       setSelected(0)
       setDocument(result.presentation)
@@ -59,17 +54,13 @@ export function DocumentImportPanel({ preview }: {
   }
 
   return (
-    <section className="space-y-3 rounded-lg border p-4">
-      <label className="flex items-center gap-2 text-sm">
-        <input type="checkbox" checked={compare} disabled={busy}
-          onChange={(event) => setCompare(event.currentTarget.checked)} />
-        Сгенерировать слайды со сравнениями из таблиц PDF
-      </label>
+    <details className="space-y-3 rounded-lg border p-4">
+      <summary className="cursor-pointer font-medium">Быстрый просмотр PDF или DOCX</summary>
       <label className="block font-medium">
-        Импорт доклада из PDF или DOCX
+        Доклад для просмотра
         <input
           type="file"
-          accept={compare ? '.pdf,application/pdf' : '.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document'}
+          accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
           disabled={busy}
           className="mt-2 block w-full text-sm"
           onChange={(event) => {
@@ -101,6 +92,6 @@ export function DocumentImportPanel({ preview }: {
           <ExportDialog open={exportOpen} onOpenChange={setExportOpen} presentation={document} scenes={scenes} />
         </>
       )}
-    </section>
+    </details>
   )
 }

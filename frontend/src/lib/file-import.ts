@@ -157,10 +157,10 @@ async function readDocx(file: File): Promise<string> {
 export async function readDocxHtml(file: File, convertImage: (image: {
   contentType: string
   readAsBase64String(): Promise<string>
-}) => Promise<{ src: string }>): Promise<string> {
+}) => Promise<{ src: string }>, includeMedia = true): Promise<string> {
   if (file.size > MAX_FILE_SIZE) throw new FileImportError('Файл больше 10 МБ.')
   const buffer = await file.arrayBuffer()
-  await assertUnpackedSize(buffer, true)
+  await assertUnpackedSize(buffer, includeMedia)
   try {
     const mammoth = await import('mammoth')
     const { value } = await mammoth.convertToHtml(

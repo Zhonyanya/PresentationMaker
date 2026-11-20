@@ -6,15 +6,19 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.presentations.pdf_blocks import pdf_blocks, read_pdf_source
 from app.presentations.pdf_document import build_pdf_document
 from app.presentations.pdf_source import (
     SourceFigure,
+    SourcePage,
     _captioned_figure,
     _framed_figures,
     _page_illustrations,
     read_pdf,
     source_material_slide,
 )
+from app.presentations.schemas import GenerateRequest
+from app.presentations.source_blocks import SOURCE_ADAPTER
 
 
 def grid_pdf(
@@ -67,6 +71,14 @@ def test_populated_grid_is_extracted_as_table():
     assert "First line" not in (page.text or "")
 
 
+def test_pdf_source_round_trips_as_a_generation_request():
+    parsed = read_pdf_source(grid_pdf(("Count", "23")))
+    source = SOURCE_ADAPTER.dump_python(parsed, mode="json", exclude_none=True)
+    generation = GenerateRequest.model_validate({"source": source, "slideCount": 5})
+    (table,) = generation.source.blocks
+    assert (table.id, table.page, table.rows[1]) == ("p1-table-1", 1, ("Second line", "23"))
+
+
 def test_dense_grid_uses_the_crop_fallback():
     source = grid_pdf(("Count", "23"))
     (page,) = read_pdf(source)
@@ -96,7 +108,7 @@ def test_framed_chart_can_contain_overlapping_raster_layers():
             search=lambda *args, **kwargs: [{"top": 52, "bottom": 64, "text": "Диаграмма 1"}],
         ),
     )
-    assert _framed_figures(page) == (SourceFigure((8, 52, 432, 333), "Диаграмма 1"),)
+    assert _framed_figures(page) == (SourceFigure((8, 52, 432, 333), "Диаграмма 1", "Диаграмма 1"),)
 
 
 def test_figure_uses_sentence_that_refers_to_its_number(monkeypatch):
@@ -123,9 +135,10 @@ def test_caption_below_a_picture_is_included():
             ),
         ),
     )
-    assert _captioned_figure(page, (20, 100, 420, 300)) == SourceFigure(
-        (8, 97, 432, 320), "Рисунок 2",
-    )
+    figure = _captioned_figure(page, (20, 100, 420, 300))
+    assert figure == SourceFigure((8, 97, 432, 320), "Рисунок 2", "Рисунок 2 — Схема")
+    (block,) = pdf_blocks((SourcePage(1, "", (), (), (figure,)),)).blocks
+    assert block.caption == "Рисунок 2 — Схема"
 
 
 def test_illustrations_skip_small_icons_and_reused_raster_objects():

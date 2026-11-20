@@ -4,10 +4,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.core.errors import AppError
 from app.presentations.routes import pdf_preview
-from app.presentations.schemas import Document
+from app.presentations.source_blocks import IllustrationBlock, SourceDocument, TableBlock, TextBlock
 from app.presentations.source_preview import build_comparison_preview
-from presentation_ml.source_document import IllustrationBlock, SourceDocument, TableBlock, TextBlock
 
 
 @pytest.mark.parametrize('changed_value', [False, True])
@@ -19,7 +19,7 @@ def test_preview_keeps_address_and_checks_responder_against_authoritative_packet
     ), page=76, number='18'),))
 
     def respond(payload, schema):
-        assert schema['properties']['comparisons']['maxItems'] == 2
+        assert schema['properties']['comparisons']['maxItems'] == 1
         (fact,) = payload['source_facts']
         if changed_value:
             fact['qualifiers']['second_value'] = '36'
@@ -37,16 +37,44 @@ def test_preview_keeps_address_and_checks_responder_against_authoritative_packet
     assert deck.slides[1].notes == 'Источник — стр. 76, таблица 18, блок p76-table-1, строка 3'
 
 
-def test_pdf_comparison_response_omits_unset_slide_fields(monkeypatch):
-    document = Document.model_validate({
-        'title': 'Доклад', 'slides': [{'id': 'cover', 'layout': 'title', 'title': 'Доклад'}],
-    })
-    monkeypatch.setattr(
-        'app.presentations.source_preview.generate_pdf_comparisons', lambda *_: document,
-    )
+def test_pdf_preview_rejects_comparison_requests():
     request = SimpleNamespace(body=AsyncMock(return_value=b'%PDF-'))
-    reply = asyncio.run(pdf_preview(request, user=None, compare=True))
-    assert reply['slides'] == [{'id': 'cover', 'layout': 'title', 'title': 'Доклад'}]
+    with pytest.raises(AppError) as exc:
+        asyncio.run(pdf_preview(request, user=None, compare=True))
+    assert exc.value.code == 'COMPARISON_REQUIRES_JOB'
+
+
+def test_comparison_without_recognized_rows_does_not_call_model():
+    source = SourceDocument((TextBlock('text', 'Результаты будут опубликованы позже.'),))
+    with pytest.raises(AppError) as exc:
+        build_comparison_preview(source, 'Доклад', 3, propose=lambda *_: pytest.fail('Called ML'))
+    assert exc.value.code == 'NO_TABLE_COMPARISONS'
+
+
+def test_comparison_candidates_keep_table_rows_when_prose_would_fill_the_budget():
+    source = SourceDocument((
+        TextBlock('text', ' '.join(
+            f'ООО «Организация {n}» участвует в программе «Пилот».' for n in range(10)
+        )),
+        TableBlock('table', (
+            ('Группа', 'Количество участников', None),
+            (None, '2022', '2023'),
+            ('Школы', '20', '35'),
+            ('Колледжи', '10', '12'),
+        )),
+    ))
+
+    def respond(payload, _schema):
+        first, second = payload['source_facts']
+        assert first['relation'] == second['relation'] == 'metric_comparison'
+        return {'comparisons': [{
+            'fact_id': second['id'], 'group': second['subject'], 'metric': second['target'],
+            **second['qualifiers'],
+        }]}
+
+    deck = build_comparison_preview(source, 'Доклад', 3, propose=respond)
+    assert [slide.layout for slide in deck.slides] == ['title', 'text', 'closing']
+    assert deck.slides[1].body == 'Колледжи\n2022 — 10\n2023 — 12'
 
 
 @pytest.mark.parametrize('linked', [True, False])

@@ -10,6 +10,7 @@ const IMAGE_TYPES = new Set(['image/png', 'image/jpeg'])
 const CAPTION = /^(?:рисунок|рис\.|диаграмма|схема|график|figure|fig\.|chart)\s*(?:№\s*)?\d+/iu
 const TABLE_CAPTION = /^(?:таблица|table)\s*(?:№\s*)?\d+/iu
 const MAX_BODY = 550
+const IMAGE_LOCATOR = 'data:,'
 
 function compact(value: string | null): string {
   return sanitizeText(value ?? '').replace(/\s+/g, ' ').trim()
@@ -70,10 +71,11 @@ type DocxBlock =
       parts: ReturnType<typeof splitDocxTable> }
   | { id: string; kind: 'illustration'; locator: string; caption: string; png: string }
 
-export async function readDocxSource(file: File) {
+export async function readDocxSource(file: File, { preview = true } = {}) {
   let omittedImages = 0
   let mediaBytes = 0
   const html = await readDocxHtml(file, async (image) => {
+    if (!preview) return { src: IMAGE_LOCATOR }
     if (IMAGE_TYPES.has(image.contentType)) {
       try {
         const encoded = await image.readAsBase64String()
@@ -90,7 +92,7 @@ export async function readDocxSource(file: File) {
     }
     omittedImages += 1
     return { src: '' }
-  })
+  }, preview)
   const document = new DOMParser().parseFromString(html, 'text/html')
   const nodes = [...document.body.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,table')]
     .filter((node) => node.tagName === 'TABLE' ? !node.parentElement?.closest('table') : !node.closest('table'))
@@ -106,7 +108,7 @@ export async function readDocxSource(file: File) {
         Array.from(row.cells, (cell) => sanitizeText(cell.textContent ?? '')))
       const number = caption.match(/^(?:таблица|table)\s*(?:№\s*)?(\d+)\b/iu)?.[1]
       const grid = readDocxTableGrid(table)
-      blocks.push({ id, kind: 'table', rows, caption, number, grid, parts: grid ? splitDocxTable(table, grid) : [] })
+      blocks.push({ id, kind: 'table', rows, caption, number, grid, parts: preview && grid ? splitDocxTable(table, grid) : [] })
       continue
     }
     const images = blockImages(node)
@@ -115,12 +117,13 @@ export async function readDocxSource(file: File) {
       let added = false
       for (const [imageIndex, image] of images.entries()) {
         const png = image.getAttribute('src')
-        if (!png?.startsWith('data:image/png;base64,')) continue
+        if (!png || (preview ? !png.startsWith('data:image/png;base64,') : png !== IMAGE_LOCATOR)) continue
         const locator = `${id}-image-${imageIndex + 1}`
         blocks.push({ id: locator, kind: 'illustration', locator, caption: [inline, caption].filter(Boolean).join(' '), png })
         added = true
       }
-      if (!added && inline) blocks.push({ id, kind: 'text', text: inline, heading: false })
+      const description = [inline, caption].filter(Boolean).join(' ')
+      if (!added && description) blocks.push({ id, kind: 'text', text: description, heading: false })
       continue
     }
     const copy = node.cloneNode(true) as Element
@@ -145,7 +148,7 @@ export function docxEvidenceBlocks(blocks: DocxBlock[]) {
         }
       }
     }
-    return { id, kind, rows, number: block.number, comparable: Boolean(block.grid) }
+    return { id, kind, rows, number: block.number, caption: block.caption, comparable: Boolean(block.grid) }
   })
 }
 

@@ -275,6 +275,7 @@ def call_ml(identifier, attempt, kind, snapshot, deadline):
                 "ML_CAPABILITY_UNAVAILABLE": "ML не поддерживает эту операцию.",
                 "INVALID_ML_RESPONSE": "ML вернул документ неверного формата.",
                 "GENERATION_FAILED": "Ошибка выполнения ML.",
+                "NO_TABLE_COMPARISONS": "В таблицах нет распознанных сравнений по периодам.",
             }
             code = reply["error"]["code"]
             if code not in messages:
@@ -349,7 +350,9 @@ def publish_result(identifier, attempt, document):
         limit_transaction(db, job.deadline_at)
         presentation.document = document
         presentation.document_token = secrets.token_urlsafe(32)
-        presentation.source_text = job.input_snapshot["text"]
+        if job.kind == "generate":
+            presentation.source_text = job.input_snapshot["text"]
+            presentation.source_document = job.input_snapshot.get("source")
         presentation.requested_slide_count = job.input_snapshot["slideCount"]
         presentation.slide_count = len(document["slides"])
         presentation.updated_at = utcnow()

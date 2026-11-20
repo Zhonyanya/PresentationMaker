@@ -2,7 +2,11 @@ import { useId, useLayoutEffect, useRef, useState, type FormEvent, type ReactNod
 import { motion, useReducedMotion, useScroll, useTransform } from 'motion/react'
 import { ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
-import { generateRequestSchema, LIMITS, type GenerateRequest } from '@/domain/presentation'
+import { generateRequestSchema, LIMITS } from '@/domain/presentation'
+import {
+  serverGenerateRequestSchema, sourceDocumentSchema, SOURCE_TEXT_MAX,
+  type ServerGenerateRequest, type SourceAttachment, type SourceDocument,
+} from '@/domain/source-document'
 import { demoExamples, type DemoExample } from '@/data/demo-examples'
 import { useFlowStore } from '@/store/flow-store'
 import { useEditorStore } from '@/store/editor-store'
@@ -11,6 +15,8 @@ import { Label } from '@/components/ui/label'
 import { AppHeader } from '@/components/app/AppHeader'
 import { EASE_OUT_EXPO, fadeUp, lineReveal, stagger } from '@/components/app/motion'
 import { SourceTextField } from './SourceTextField'
+import { useSourceFileImport } from './useSourceFileImport'
+import { FileImportError, readSourceFile } from '@/lib/file-import'
 import { SlideCountField } from './SlideCountField'
 import { ExampleList } from './ExampleList'
 import { DraftBanner } from './DraftBanner'
@@ -63,8 +69,14 @@ function SectionLabel({ number, title, aside }: { number: string; title: string;
   )
 }
 
-export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, serverMode = false, headerSlot, notice, startAtWorkspace = false }: {
-  onGenerate?: (request: GenerateRequest) => void
+export function CreatePage({
+  onGenerate, onOpenCurrent, onDiscardCurrent, serverMode = false, headerSlot, notice,
+  startAtWorkspace = false, sourceAttachment, setSourceAttachment, readPdfSource,
+}: {
+  onGenerate?: (request: ServerGenerateRequest) => void
+  sourceAttachment?: SourceAttachment | null
+  setSourceAttachment?: (attachment: SourceAttachment | null) => void
+  readPdfSource?: (file: File, signal: AbortSignal) => Promise<SourceDocument>
   onOpenCurrent?: () => void
   /** Серверный режим: забыть текущую презентацию, чтобы следующая генерация создала новую */
   onDiscardCurrent?: () => void
@@ -88,6 +100,35 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
   const savedAt = useEditorStore((s) => s.savedAt)
   const closeEditor = useEditorStore((s) => s.close)
   const [errors, setErrors] = useState<FieldErrors>({})
+  const maxTextLength = serverMode ? SOURCE_TEXT_MAX : LIMITS.sourceTextMax
+  const { importFile, loading } = useSourceFileImport(async (file, signal) => {
+    const extension = file.name.split('.').pop()?.toLowerCase()
+    if (readPdfSource && setSourceAttachment && (extension === 'pdf' || extension === 'docx')) {
+      if (file.size > 10_000_000) throw new FileImportError('Файл больше 10 МБ.')
+      let source: SourceDocument
+      if (extension === 'pdf') {
+        source = await readPdfSource(file, signal)
+      } else {
+        const { readDocxSource, docxEvidenceBlocks } = await import('@/lib/docx-presentation')
+        const { blocks } = await readDocxSource(file, { preview: false })
+        const parsed = sourceDocumentSchema.safeParse({ blocks: docxEvidenceBlocks(blocks) })
+        if (!parsed.success) throw new FileImportError('В DOCX нет доступного содержимого или слишком много блоков.')
+        source = parsed.data
+      }
+      if (signal.aborted) return
+      setSourceAttachment({ name: file.name, document: source, compare: false })
+    } else {
+      const text = (await readSourceFile(file)).trim()
+      if (signal.aborted) return
+      if (!text) throw new FileImportError('В файле нет текста.')
+      if (text.length > maxTextLength) {
+        throw new FileImportError(`В файле больше ${maxTextLength.toLocaleString('ru-RU')} символов. Разделите доклад на части.`)
+      }
+      setSourceAttachment?.(null)
+      setDraft({ text })
+    }
+    setErrors({})
+  })
 
   // Параллакс обложки: заголовок уходит вверх быстрее колоды — появляется глубина
   const reduceMotion = useReducedMotion()
@@ -101,11 +142,23 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault()
-    const result = generateRequestSchema.safeParse({
-      text: draft.text,
+    if (loading) return
+    const text = draft.text.trim()
+    const settings = {
       title: draft.title.trim() || undefined,
       slideCount: draft.slideCount,
-    })
+    }
+    if (!sourceAttachment && text.length > maxTextLength) {
+      setErrors({ text: `Текст слишком длинный — максимум ${maxTextLength.toLocaleString('ru-RU')} символов` })
+      document.getElementById(textId)?.focus()
+      return
+    }
+    const source = sourceAttachment?.document ?? (serverMode && text.length >= LIMITS.sourceTextMin
+      ? { blocks: [{ id: 'text-1', kind: 'text' as const, text }] }
+      : undefined)
+    const result = source ? serverGenerateRequestSchema.safeParse({
+      ...settings, source, mode: sourceAttachment?.compare ? 'comparisons' : undefined,
+    }) : generateRequestSchema.safeParse({ ...settings, text })
     if (!result.success) {
       const next: FieldErrors = {}
       for (const issue of result.error.issues) {
@@ -141,6 +194,8 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
   }
 
   const pickExample = (example: DemoExample) => {
+    if (loading) return
+    setSourceAttachment?.(null)
     setDraft({ text: example.text, title: example.title, slideCount: example.slideCount })
     setErrors({})
     toast.success('Пример загружен', { description: example.label })
@@ -308,6 +363,25 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
                 error={errors.text}
                 onSubmitShortcut={() => submit()}
                 onShowExamples={showExamples}
+                importFile={importFile}
+                loading={loading}
+                maxLength={maxTextLength}
+                acceptPdf={Boolean(readPdfSource)}
+                attachment={sourceAttachment && (
+                  <div className="space-y-3 rounded border border-input bg-card p-4">
+                    <p className="break-all text-sm">{sourceAttachment.name}</p>
+                    {sourceAttachment.document.blocks.some((block) => block.kind === 'table' && block.comparable !== false) && (
+                      <label className="flex items-center gap-2 text-sm">
+                        <input type="checkbox" checked={sourceAttachment.compare} disabled={loading}
+                          onChange={(event) => setSourceAttachment?.({ ...sourceAttachment, compare: event.currentTarget.checked })} />
+                        Создать слайды со сравнениями из таблиц
+                      </label>
+                    )}
+                    <Button type="button" size="sm" variant="ghost" disabled={loading} onClick={() => setSourceAttachment?.(null)}>
+                      Убрать файл
+                    </Button>
+                  </div>
+                )}
               />
 
               <div className="flex flex-col-reverse gap-4 border-t border-border pt-6 sm:flex-row sm:items-center sm:justify-between">
@@ -315,7 +389,7 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
                   <kbd className="font-sans font-medium text-foreground">Ctrl + Enter</kbd> — создать, не отрывая рук от клавиатуры
                 </p>
                 <Magnetic className="w-full sm:w-auto">
-                  <Button type="submit" size="xl" className="group w-full sm:w-auto">
+                  <Button type="submit" size="xl" className="group w-full sm:w-auto" disabled={loading}>
                     Создать презентацию
                     <ArrowRight className="transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:translate-x-1" />
                   </Button>

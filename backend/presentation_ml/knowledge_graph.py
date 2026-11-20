@@ -75,12 +75,16 @@ class KnowledgeGraph:
     nodes: tuple[EntityNode, ...]
     edges: tuple[RelationEdge, ...]
 
-    def select_edges(self, *, limit: int) -> tuple[RelationEdge, ...]:
+    def select_edges(
+        self, *, limit: int, relations: frozenset[str] | None = None,
+    ) -> tuple[RelationEdge, ...]:
         """Select distinct assertions in source order, retaining their evidence."""
         if limit < 1:
             raise ValueError('Relation limit must be positive')
         selected = {}
         for edge in self.edges:
+            if relations is not None and edge.relation not in relations:
+                continue
             key = (edge.subject, edge.relation, edge.target, edge.status, edge.qualifiers)
             selected.setdefault(key, edge)
             if len(selected) == limit:

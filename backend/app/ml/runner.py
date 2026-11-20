@@ -17,6 +17,7 @@ PUBLIC_ERRORS = {
     "ML_CAPABILITY_UNAVAILABLE": "ML не поддерживает эту операцию.",
     "INVALID_ML_RESPONSE": "ML вернул документ неверного формата.",
     "GENERATION_FAILED": "Ошибка выполнения ML.",
+    "NO_TABLE_COMPARISONS": "В таблицах нет распознанных сравнений по периодам.",
 }
 
 

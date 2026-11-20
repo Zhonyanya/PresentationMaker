@@ -28,6 +28,11 @@ class ModuleAdapter:
                 503, "ML_CAPABILITY_UNAVAILABLE", "ML не подтвердил сохранение ID слайдов."
             )
         try:
+            if "source" in inputs and not getattr(self.module, "SUPPORTS_SOURCE_DOCUMENT", False):
+                text_length = len(inputs["text"].encode("utf-16-le")) // 2
+                if "mode" in inputs or not 100 <= text_length <= 60_000:
+                    raise NotImplementedError("Structured sources are unsupported by this module")
+                inputs = {key: value for key, value in inputs.items() if key != "source"}
             result = function(**inputs)
             if inspect.isawaitable(result):
                 result = asyncio.run(result)

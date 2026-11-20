@@ -1,53 +1,21 @@
 """Format-independent source blocks for offline preparation of slide evidence."""
 
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Annotated, Literal
 
-from pydantic import Field, TypeAdapter
+from app.presentations.source_blocks import (
+    SOURCE_ADAPTER,
+    SourceDocument,
+    TableBlock,
+    TextBlock,
+)
 
 from .grounding import recognize_entities
 from .knowledge_graph import KnowledgeGraph, RelationEdge, ReportTable, build_knowledge_graph
 
 
-@dataclass(frozen=True)
-class TextBlock:
-    id: str
-    text: str
-    page: int | None = None
-    kind: Literal['text'] = 'text'
-
-
-@dataclass(frozen=True)
-class TableBlock:
-    id: str
-    rows: tuple[tuple[str | None, ...], ...]
-    page: int | None = None
-    number: str | None = None
-    comparable: bool = True
-    kind: Literal['table'] = 'table'
-
-
-@dataclass(frozen=True)
-class IllustrationBlock:
-    id: str
-    locator: str
-    caption: str = ''
-    page: int | None = None
-    kind: Literal['illustration'] = 'illustration'
-
-
-@dataclass(frozen=True)
-class SourceDocument:
-    blocks: tuple[
-        Annotated[TextBlock | TableBlock | IllustrationBlock, Field(discriminator='kind')], ...
-    ]
-
-
 def read_source_json(payload: str | bytes) -> SourceDocument:
-    source = TypeAdapter(SourceDocument).validate_json(payload)
-    if len({block.id for block in source.blocks}) != len(source.blocks):
-        raise ValueError('Source block identifiers must be unique')
-    return source
+    return SOURCE_ADAPTER.validate_json(payload)
 
 
 @dataclass(frozen=True)
@@ -66,7 +34,7 @@ def text_blocks(text: str) -> SourceDocument:
 
 
 def prepare_evidence(
-    source: SourceDocument, *, limit: int,
+    source: SourceDocument, *, limit: int, relations: frozenset[str] | None = None,
 ) -> tuple[KnowledgeGraph, tuple[Evidence, ...]]:
     """Rank graph assertions with resolvable evidence, preferring named entities."""
     if limit < 1:
@@ -83,15 +51,17 @@ def prepare_evidence(
     )
     candidates = []
     names = {node.id: node.name for node in graph.nodes}
-    for edge in graph.select_edges(limit=max(1, len(graph.edges))):
+    normalized = defaultdict(list)
+    for block in texts:
+        normalized[block.page].append((block, ' '.join(block.text.split())))
+    for edge in graph.select_edges(limit=max(1, len(graph.edges)), relations=relations):
         if edge.table_row is not None:
             fields = dict(edge.qualifiers)
             table = by_id[fields['table']]
             candidates.append((0, Evidence(table.id, edge, int(fields['row']))))
         elif edge.quote:
             matches = [
-                block for block in texts
-                if block.page == edge.page and edge.quote in ' '.join(block.text.split())
+                block for block, content in normalized[edge.page] if edge.quote in content
             ]
             if len(matches) == 1:
                 related = None
@@ -111,9 +81,11 @@ def prepare_evidence(
     return graph, tuple(evidence for _, evidence in candidates[:limit])
 
 
-def build_source_payload(source: SourceDocument, *, limit: int = 12) -> dict:
-    """Build JSON-ready facts and their source addresses for a generation preview."""
-    graph, evidence = prepare_evidence(source, limit=limit)
+def build_source_payload(
+    source: SourceDocument, *, limit: int = 12, relations: frozenset[str] | None = None,
+) -> dict:
+    """Build JSON-ready facts and their source addresses."""
+    graph, evidence = prepare_evidence(source, limit=limit, relations=relations)
     entities = {node.id: node.name for node in graph.nodes}
     tables = {block.id: block for block in source.blocks if isinstance(block, TableBlock)}
     facts = []

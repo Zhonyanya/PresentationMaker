@@ -74,6 +74,7 @@ class Presentation(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     owner_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
     source_text: Mapped[str] = mapped_column(Text)
+    source_document: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     requested_slide_count: Mapped[int] = mapped_column(Integer)
     document: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
     document_token: Mapped[str | None] = mapped_column(String(128))

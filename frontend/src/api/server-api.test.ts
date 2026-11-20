@@ -34,6 +34,22 @@ describe('серверный контракт v1', () => {
     expect(JSON.parse(mock.mock.calls[1][1].body).slideCount).toBe(8)
   })
 
+  it('передаёт PDF-блоки с пустыми ячейками в обычное задание сравнений', async () => {
+    const source = { blocks: [{ id: 'p1-table-1', kind: 'table', rows: [['Группа', null]] }] }
+    const mock = vi.fn()
+      .mockResolvedValueOnce(json({ csrf_token: 'csrf' }))
+      .mockResolvedValueOnce(json(source))
+      .mockResolvedValueOnce(json({ presentation_id: id, job_id: id, status_url: '/job' }, 202))
+    const api = createServerApi({ baseUrl: '', fetch: mock })
+    const file = new File(['%PDF-'], 'report.pdf')
+    const extracted = await api.readPdfSource(file)
+    await api.generate({ source: extracted, mode: 'comparisons', slideCount: 5 }, 'stable-key')
+    expect(mock.mock.calls[1][0]).toBe('/api/v1/presentations/pdf-source')
+    expect(mock.mock.calls[1][1].body).toBe(file)
+    expect(mock.mock.calls[2][0]).toBe('/api/v1/presentations')
+    expect(JSON.parse(mock.mock.calls[2][1].body)).toEqual({ source, mode: 'comparisons', slideCount: 5 })
+  })
+
   it.each([[401, 'unauthorized'], [403, 'forbidden'], [404, 'not_found'], [409, 'conflict']])('явно различает HTTP %i', async (status, code) => {
     const api = createServerApi({ baseUrl: '', fetch: vi.fn(async () => json({ error: { code: 'SAFE_ERROR', message: 'Ошибка' } }, Number(status))) })
     await expect(api.current(id)).rejects.toMatchObject({ code, status })

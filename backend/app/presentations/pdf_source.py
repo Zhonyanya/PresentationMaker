@@ -92,6 +92,7 @@ class SourceTable:
 class SourceFigure:
     bounds: tuple[float, float, float, float]
     reference: str
+    caption: str = ''
 
 
 @dataclass(frozen=True)
@@ -142,6 +143,7 @@ def _captioned_figure(page, frame):
             return SourceFigure(
                 (left, caption['top'], right, min(pbottom, bottom + 3)),
                 _CAPTION.match(caption['text'])[1],
+                caption['text'].strip(),
             )
     below = min(pbottom, bottom + 36)
     if bottom < below:
@@ -151,6 +153,7 @@ def _captioned_figure(page, frame):
             return SourceFigure(
                 (left, max(ptop, top - 3), right, caption['bottom']),
                 _CAPTION.match(caption['text'])[1],
+                caption['text'].strip(),
             )
     return None
 

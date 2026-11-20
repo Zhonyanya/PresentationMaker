@@ -1,12 +1,10 @@
-import { useRef, useState, type DragEvent } from 'react'
+import { useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { ClipboardPaste, FileUp, Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { LIMITS } from '@/domain/presentation'
 import { ACCEPTED_FILE_TYPES } from '@/lib/file-import'
 import { cn, formatNumber, plural } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
-import { useSourceFileImport } from './useSourceFileImport'
 
 interface SourceTextFieldProps {
   id: string
@@ -15,23 +13,28 @@ interface SourceTextFieldProps {
   error?: string
   onSubmitShortcut: () => void
   onShowExamples: () => void
+  importFile: (file: File) => Promise<void>
+  loading: boolean
+  maxLength: number
+  acceptPdf?: boolean
+  attachment?: ReactNode
 }
 
-export function SourceTextField({ id, value, onChange, error, onSubmitShortcut, onShowExamples }: SourceTextFieldProps) {
+export function SourceTextField({
+  id, value, onChange, error, onSubmitShortcut, onShowExamples,
+  importFile, loading, maxLength, acceptPdf, attachment,
+}: SourceTextFieldProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
-  const { importFile, loading } = useSourceFileImport((text) => {
-    onChange(text)
-    textareaRef.current?.focus()
-  })
 
   const length = value.length
   const words = value.trim() ? value.trim().split(/\s+/).length : 0
-  const overLimit = length > LIMITS.sourceTextMax
+  const overLimit = length > maxLength
   const empty = value.trim() === ''
   const errorId = `${id}-error`
   const hintId = `${id}-hint`
+  const extensions = acceptPdf ? '.txt, .md, .docx и .pdf' : '.txt, .md и .docx'
 
   const pasteFromClipboard = async () => {
     try {
@@ -59,13 +62,13 @@ export function SourceTextField({ id, value, onChange, error, onSubmitShortcut, 
     <div className="flex flex-col gap-2">
       <div className="flex min-h-8 flex-wrap items-center justify-between gap-x-3 gap-y-1">
         <Label htmlFor={id} className="eyebrow">
-          Текст доклада или план выступления
+          {attachment ? 'Исходный документ' : 'Текст доклада или план выступления'}
         </Label>
         <div className="-mx-2 flex items-center gap-1 sm:mx-0">
           <input
             ref={fileInputRef}
             type="file"
-            accept={ACCEPTED_FILE_TYPES}
+            accept={ACCEPTED_FILE_TYPES + (acceptPdf ? ',.pdf,application/pdf' : '')}
             className="sr-only"
             tabIndex={-1}
             aria-hidden
@@ -79,13 +82,14 @@ export function SourceTextField({ id, value, onChange, error, onSubmitShortcut, 
             {loading ? <Loader2 className="animate-spin" /> : <FileUp />}
             Загрузить файл
           </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => { onChange(''); textareaRef.current?.focus() }} disabled={empty}>
+          {!attachment && <Button type="button" variant="ghost" size="sm" onClick={() => { onChange(''); textareaRef.current?.focus() }} disabled={empty}>
             <Trash2 />
             Очистить
-          </Button>
+          </Button>}
         </div>
       </div>
 
+      {attachment ?? <>
       <div
         className={cn(
           'relative transition-[box-shadow]',
@@ -137,7 +141,7 @@ export function SourceTextField({ id, value, onChange, error, onSubmitShortcut, 
                   Вставить из буфера
                 </Button>
                 <Button type="button" variant="link" size="sm" onClick={() => fileInputRef.current?.click()}>
-                  Загрузить .txt, .md или .docx
+                  Загрузить файл
                 </Button>
                 <Button type="button" variant="link" size="sm" onClick={onShowExamples}>
                   Открыть пример
@@ -162,15 +166,16 @@ export function SourceTextField({ id, value, onChange, error, onSubmitShortcut, 
             </p>
           ) : (
             <p id={hintId} className="text-muted-foreground">
-              Можно перетащить файл в поле. Поддерживаются .txt, .md и .docx.
+              Можно перетащить файл в поле. Поддерживаются {extensions}.
             </p>
           )}
         </div>
         <p className={cn('tabular-nums text-muted-foreground', overLimit && 'font-medium text-destructive')} aria-live="polite">
-          {formatNumber(length)} / {formatNumber(LIMITS.sourceTextMax)} {plural(LIMITS.sourceTextMax, ['символ', 'символа', 'символов'])}
+          {formatNumber(length)} / {formatNumber(maxLength)} {plural(maxLength, ['символ', 'символа', 'символов'])}
           {words > 0 && <span className="text-muted-foreground"> · {formatNumber(words)} {plural(words, ['слово', 'слова', 'слов'])}</span>}
         </p>
       </div>
+      </>}
     </div>
   )
 }

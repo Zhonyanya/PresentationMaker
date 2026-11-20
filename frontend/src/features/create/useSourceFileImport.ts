@@ -1,36 +1,35 @@
-import { useCallback, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { FileImportError, readSourceFile } from '@/lib/file-import'
-import { LIMITS } from '@/domain/presentation'
+import { FileImportError } from '@/lib/file-import'
+import { toApiError } from '@/api/errors'
 
-/** Загрузка исходного текста из файла с обработкой ошибок. */
-export function useSourceFileImport(onText: (text: string, fileName: string) => void) {
+export function useSourceFileImport(read: (file: File, signal: AbortSignal) => Promise<void>) {
   const [loading, setLoading] = useState(false)
 
-  const importFile = useCallback(
-    async (file: File) => {
-      setLoading(true)
-      try {
-        const text = (await readSourceFile(file)).trim()
-        if (!text) {
-          toast.error('В файле нет текста', { description: file.name })
-          return
-        }
-        const clipped = text.slice(0, LIMITS.sourceTextMax)
-        onText(clipped, file.name)
-        toast.success('Текст загружен', {
-          description: clipped.length < text.length ? `${file.name} — текст сокращён до допустимого объёма` : file.name,
-        })
-      } catch (error) {
+  const active = useRef<AbortController | null>(null)
+  useEffect(() => () => active.current?.abort(), [])
+
+  async function importFile(file: File) {
+    active.current?.abort()
+    const controller = new AbortController()
+    active.current = controller
+    setLoading(true)
+    try {
+      await read(file, controller.signal)
+      if (!controller.signal.aborted) toast.success('Доклад загружен', { description: file.name })
+    } catch (error) {
+      if (!controller.signal.aborted) {
         toast.error('Не удалось загрузить файл', {
-          description: error instanceof FileImportError ? error.message : 'Попробуйте другой файл или вставьте текст вручную.',
+          description: error instanceof FileImportError ? error.message : toApiError(error).message,
         })
-      } finally {
+      }
+    } finally {
+      if (active.current === controller && !controller.signal.aborted) {
+        active.current = null
         setLoading(false)
       }
-    },
-    [onText],
-  )
+    }
+  }
 
   return { importFile, loading }
 }

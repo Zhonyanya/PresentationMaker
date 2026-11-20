@@ -257,7 +257,9 @@ class BodyLimitMiddleware:
         client = (scope.get("client") or ("unknown", 0))[0]
         limit = 10_000_000 if (
             scope.get('method') == 'POST'
-            and scope.get('path') == '/api/v1/presentations/pdf-preview'
+            and scope.get('path') in {
+                '/api/v1/presentations/pdf-preview', '/api/v1/presentations/pdf-source',
+            }
         ) else self.limit
 
         async def reject(status, code, message):

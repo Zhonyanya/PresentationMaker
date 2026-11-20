@@ -14,6 +14,7 @@ from pydantic import (
 )
 
 from app.core.errors import AppError
+from app.presentations.source_blocks import SourceInput
 
 
 def database_text(value: str) -> str:
@@ -161,11 +162,16 @@ class Document(Contract):
     slides: Annotated[list[Slide], Field(min_length=1, max_length=60)]
 
 
+ReportText = text(60000, 100, trim=True)
+
+
 class GenerateRequest(Contract):
     """Запрос генерации с обязательным желаемым slideCount, а не числом по умолчанию."""
 
-    text: text(60000, 100, trim=True)
     title: text(200, trim=True) | None = None
+    text: ReportText | None = None
+    source: SourceInput | None = None
+    mode: Literal["comparisons"] | None = None
     slideCount: Annotated[int, Field(ge=3, le=20)]
 
     @model_validator(mode="before")
@@ -175,6 +181,14 @@ class GenerateRequest(Contract):
         if isinstance(value, dict) and "title" in value and value["title"] is None:
             raise ValueError("Optional title must be absent, not null")
         return value
+
+    @model_validator(mode="after")
+    def one_source(self):
+        if (self.text is None) == (self.source is None):
+            raise ValueError("Supply either text or a structured source")
+        if self.mode == "comparisons" and self.source is None:
+            raise ValueError("Comparisons require a structured source")
+        return self
 
 
 class RegenerateRequest(GenerateRequest):

@@ -3,7 +3,7 @@ import { MotionConfig, useReducedMotion } from 'motion/react'
 import { env } from '@/config/env'
 import { createServerApi, type AcceptedJob, type CurrentPresentation, type JobStatus, type LibraryItem, type ServerUser } from '@/api/server-api'
 import { toApiError } from '@/api/errors'
-import type { GenerateRequest } from '@/domain/presentation'
+import type { ServerGenerateRequest, SourceAttachment } from '@/domain/source-document'
 import { useEditorStore, selectSelectedSlide } from '@/store/editor-store'
 import { useFlowStore } from '@/store/flow-store'
 import { safeStorage } from '@/lib/storage'
@@ -96,6 +96,8 @@ function Workspace() {
   // Кнопка «Обновить документ» уместна, только если документ мог измениться на сервере
   const [errorCanRefresh, setErrorCanRefresh] = useState(false)
   const draftText = useFlowStore((s) => s.draft.text)
+  const [sourceAttachment, setSourceAttachment] = useState<SourceAttachment | null>(null)
+  const [draftVersion, setDraftVersion] = useState(0)
   // Документ, для которого пояснение о числе слайдов уже закрыто
   const [shortfallSeen, setShortfallSeen] = useState<string | null>(null)
   const jobKindRef = useRef<JobKind>(null)
@@ -122,6 +124,7 @@ function Workspace() {
     setInstruction(''); setTargets(''); setPassword(''); setLogin(''); setError(''); setBusy(false); setExportOpen(false)
     useEditorStore.getState().close()
     useFlowStore.getState().clearDraft()
+    setSourceAttachment(null)
   }, [])
 
   const applyCurrent = useCallback((value: CurrentPresentation) => {
@@ -332,7 +335,7 @@ function Workspace() {
     finally { setBusy(false) }
   }
 
-  const launch = async (operation: 'generate' | 'revise', body?: GenerateRequest) => {
+  const launch = async (operation: 'generate' | 'revise', body?: ServerGenerateRequest) => {
     if (!user || busy) return
     if (job) {
       setError('Дождитесь завершения текущего задания — оно ещё выполняется на сервере.')
@@ -395,6 +398,8 @@ function Workspace() {
   const selectedIndex = Math.max(0, document?.slides.findIndex((s) => s.id === selected?.id) ?? 0)
   const startNew = () => {
     setCurrent(null); setEditor(false); setInstruction(''); setTargets(''); setError(''); submission.current = null
+    setSourceAttachment(null)
+    setDraftVersion((version) => version + 1)
     useEditorStore.getState().close(); useFlowStore.getState().clearDraft(); safeStorage.removeItem(referenceKey(user))
   }
   const leaveWaiting = () => { setWaiting(false); setEditor(false) }
@@ -404,6 +409,10 @@ function Workspace() {
     try {
       const value = await api.current(id)
       if (activeEpoch !== epoch.current) return
+      if (current?.presentation_id !== id) {
+        setSourceAttachment(null)
+        setDraftVersion((version) => version + 1)
+      }
       applyCurrent(value); setJob(value.active_job); setWaiting(Boolean(value.active_job))
       const meta = value.active_job ? await readJobMeta(value.active_job.job_id) : { kind: null, startedAt: null }
       setJobKind(meta.kind); setJobStartedAt(value.active_job ? meta.startedAt ?? Date.now() : null)
@@ -476,7 +485,7 @@ function Workspace() {
         onTargets={setTargets}
         onRevise={() => void launch('revise')}
         onRegenerate={leaveWaiting}
-        sourceKept={Boolean(draftText.trim())}
+        sourceKept={Boolean(sourceAttachment || draftText.trim())}
       />
     )
   } else if (job && waiting) {
@@ -484,7 +493,11 @@ function Workspace() {
   } else {
     screen = (
       <CreatePage
+        key={draftVersion}
         serverMode
+        sourceAttachment={sourceAttachment}
+        setSourceAttachment={setSourceAttachment}
+        readPdfSource={api.readPdfSource}
         headerSlot={account}
         startAtWorkspace={Boolean(job || current)}
         notice={<>

@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { generateRequestSchema, presentationSchema, type GenerateRequest } from '@/domain/presentation'
+import { presentationSchema } from '@/domain/presentation'
+import { serverGenerateRequestSchema, sourceDocumentSchema, type ServerGenerateRequest } from '@/domain/source-document'
 import { ApiError } from './errors'
 
 const userSchema = z.object({ id: z.string().uuid(), login: z.string() })
@@ -130,11 +131,10 @@ export function createServerApi(config: { baseUrl: string; fetch?: typeof fetch;
     async logout() { await post('/auth/logout', {}, z.null()); csrfToken = null },
     current(id: string, signal?: AbortSignal) { return request(`/presentations/${encodeURIComponent(id)}`, currentSchema, { signal }) },
     status(id: string, signal?: AbortSignal) { return request(`/jobs/${encodeURIComponent(id)}`, statusSchema, { signal }) },
-    async previewPdf(file: File, signal?: AbortSignal, compare = false) {
+    async previewPdf(file: File, signal?: AbortSignal) {
       if (!csrfToken) await csrf()
       const title = file.name.replace(/\.pdf$/i, '').trim().slice(0, 200) || 'Доклад'
       const query = new URLSearchParams({ title })
-      if (compare) query.set('compare', 'true')
       return request(`/presentations/pdf-preview?${query}`, presentationSchema, {
         method: 'POST',
         body: file,
@@ -142,8 +142,17 @@ export function createServerApi(config: { baseUrl: string; fetch?: typeof fetch;
         headers: { 'Content-Type': 'application/pdf', 'X-CSRF-Token': csrfToken! },
       }, 180_000)
     },
-    async generate(body: GenerateRequest, key: string, signal?: AbortSignal, current?: CurrentPresentation) {
-      const parsed = generateRequestSchema.safeParse(body)
+    async readPdfSource(file: File, signal?: AbortSignal) {
+      if (!csrfToken) await csrf()
+      return request('/presentations/pdf-source', sourceDocumentSchema, {
+        method: 'POST',
+        body: file,
+        signal,
+        headers: { 'Content-Type': 'application/pdf', 'X-CSRF-Token': csrfToken! },
+      }, 180_000)
+    },
+    async generate(body: ServerGenerateRequest, key: string, signal?: AbortSignal, current?: CurrentPresentation) {
+      const parsed = serverGenerateRequestSchema.safeParse(body)
       if (!parsed.success) throw new ApiError('validation', { message: parsed.error.issues[0]?.message })
       return post(current ? `/presentations/${encodeURIComponent(current.presentation_id)}/generations` : '/presentations',
         { ...parsed.data, ...(current ? { base_document_token: current.document_token } : {}) }, acceptedSchema, key, signal)

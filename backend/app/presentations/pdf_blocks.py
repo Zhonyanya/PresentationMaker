@@ -1,13 +1,21 @@
 """Adapt extracted PDF pages to the common source document."""
 
-from presentation_ml.source_document import (
+from typing import BinaryIO
+
+from app.presentations.source_blocks import (
+    SOURCE_ADAPTER,
     IllustrationBlock,
     SourceDocument,
     TableBlock,
     TextBlock,
 )
 
-from .pdf_source import SourcePage
+from .pdf_source import SourcePage, read_pdf
+
+
+def read_pdf_source(source: BinaryIO) -> SourceDocument:
+    document = pdf_blocks(read_pdf(source))
+    return SOURCE_ADAPTER.validate_python(document)
 
 
 def pdf_blocks(pages: tuple[SourcePage, ...]) -> SourceDocument:
@@ -20,7 +28,9 @@ def pdf_blocks(pages: tuple[SourcePage, ...]) -> SourceDocument:
             blocks.append(TableBlock(
                 f'{prefix}-table-{index}', table.rows, page.number, table.number,
             ))
-        illustrations = [(figure.bounds, figure.reference) for figure in page.figures]
+        illustrations = [
+            (figure.bounds, figure.caption or figure.reference) for figure in page.figures
+        ]
         illustrations.extend((bounds, '') for bounds in page.images)
         for index, (bounds, caption) in enumerate(illustrations, 1):
             locator = ','.join(str(value) for value in bounds)

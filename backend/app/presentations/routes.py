@@ -5,7 +5,7 @@ from typing import Annotated
 from uuid import UUID
 
 import anyio
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from sqlalchemy import select
 
 from app.auth.service import DB, CurrentUser, authenticated_csrf_guard, rate_limit
@@ -14,6 +14,7 @@ from app.core.errors import AppError
 from app.db.models import Job, Presentation, utcnow
 from app.jobs.service import ACTIVE, accepted, owned_presentation, submit
 from app.presentations.schemas import GenerateRequest, RegenerateRequest, ReviseRequest
+from app.presentations.source_blocks import SOURCE_ADAPTER
 
 router = APIRouter(tags=["presentations"])
 Key = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
@@ -60,18 +61,8 @@ async def enqueue(db, user, key, body, identifier=None):
 pdf_import_slots = anyio.CapacityLimiter(2)
 
 
-@router.post("/presentations/pdf-preview", dependencies=WRITE)
-async def pdf_preview(
-    request: Request,
-    user: CurrentUser,
-    title: Annotated[str, Query(min_length=1, max_length=200)] = "Доклад",
-    slide_count: Annotated[int, Query(ge=3, le=20)] = 10,
-    compare: bool = False,
-):
-    """Build a temporary presentation from a PDF supplied by the signed-in user."""
+async def read_pdf_upload(request: Request, process, *args):
     from pdfminer.pdfexceptions import PDFException
-
-    from app.presentations.pdf_document import build_pdf_document
 
     data = await request.body()
     if not data.startswith(b"%PDF-"):
@@ -81,18 +72,39 @@ async def pdf_preview(
     except anyio.WouldBlock:
         raise AppError(503, "PDF_BUSY", "Импорт занят. Повторите позже.") from None
     try:
-        if compare:
-            from app.presentations.source_preview import generate_pdf_comparisons
-
-            document = await anyio.to_thread.run_sync(
-                generate_pdf_comparisons, BytesIO(data), title, slide_count,
-            )
-            return document.model_dump(exclude_none=True)
-        return await anyio.to_thread.run_sync(build_pdf_document, BytesIO(data), title, slide_count)
+        return await anyio.to_thread.run_sync(process, BytesIO(data), *args)
     except (PDFException, ValueError, OSError):
         raise AppError(422, "INVALID_PDF", "Не удалось обработать PDF-документ.") from None
     finally:
         pdf_import_slots.release()
+
+
+@router.post("/presentations/pdf-preview", dependencies=WRITE)
+async def pdf_preview(
+    request: Request,
+    user: CurrentUser,
+    title: Annotated[str, Query(min_length=1, max_length=200)] = "Доклад",
+    slide_count: Annotated[int, Query(ge=3, le=20)] = 10,
+    compare: bool = False,
+):
+    """Build a temporary preview without calling ML."""
+    from app.presentations.pdf_document import build_pdf_document
+
+    if compare:
+        raise AppError(422, "COMPARISON_REQUIRES_JOB", "Создайте задание для сравнения таблиц.")
+    return await read_pdf_upload(request, build_pdf_document, title, slide_count)
+
+
+@router.post("/presentations/pdf-source", dependencies=WRITE)
+async def pdf_source(request: Request, user: CurrentUser):
+    """Extract the source for a subsequent generation request."""
+    from app.presentations.pdf_blocks import read_pdf_source
+
+    source = await read_pdf_upload(request, read_pdf_source)
+    data = SOURCE_ADAPTER.dump_json(source, exclude_none=True)
+    if len(data) > get_settings().max_http_bytes:
+        raise AppError(413, "PAYLOAD_TOO_LARGE", "Извлечённый доклад слишком большой.")
+    return Response(content=data, media_type="application/json")
 
 
 @router.post("/presentations", status_code=202, dependencies=WRITE)
@@ -172,6 +184,7 @@ async def delete_presentation(identifier: UUID, user: CurrentUser, db: DB):
     ):
         raise AppError(409, "JOB_ALREADY_ACTIVE", "Дождитесь завершения задания.")
     presentation.source_text = ""
+    presentation.source_document = None
     presentation.document = presentation.document_token = presentation.slide_count = None
     presentation.deleted_at = presentation.updated_at = utcnow()
     await db.commit()

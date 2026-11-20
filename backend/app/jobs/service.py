@@ -11,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.db.models import Job, Presentation, utcnow
-from app.presentations.schemas import GenerateRequest, ReviseRequest
+from app.presentations.schemas import ReviseRequest
+from app.presentations.source_blocks import source_text
 
 ACTIVE = ("queued", "running")
 
@@ -80,7 +81,7 @@ async def submit(db: AsyncSession, owner: UUID, key: str, body, identifier: UUID
             422, "INVALID_IDEMPOTENCY_KEY", "Нужен Idempotency-Key (1–128 ASCII-символов)."
         )
     operation = "revise" if isinstance(body, ReviseRequest) else "generate"
-    payload = body.model_dump(exclude_none=True)
+    payload = body.model_dump(mode="json", exclude_none=True)
     canonical = {
         "operation": operation,
         "target": str(identifier) if identifier else None,
@@ -160,11 +161,15 @@ async def submit(db: AsyncSession, owner: UUID, key: str, body, identifier: UUID
             if targets
             else None,
         }
+        if presentation.source_document is not None:
+            snapshot["source"] = presentation.source_document
     else:
-        snapshot = GenerateRequest.model_validate(payload).model_dump(exclude_none=True)
+        snapshot = {k: v for k, v in payload.items() if k != "base_document_token"}
+        if body.source is not None:
+            snapshot["text"] = source_text(body.source)
     if presentation is None:
         presentation = Presentation(
-            owner_id=owner, source_text=body.text, requested_slide_count=body.slideCount
+            owner_id=owner, source_text=snapshot["text"], requested_slide_count=body.slideCount
         )
         db.add(presentation)
         await db.flush()

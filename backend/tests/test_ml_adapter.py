@@ -24,6 +24,18 @@ def test_sync_generate_receives_count_and_context(monkeypatch, document):
     assert received["job_id"] == "job" and result == document
 
 
+def test_legacy_module_receives_compatible_text_from_source(monkeypatch, document):
+    module = types.ModuleType("presentation_ml")
+    module.generate = lambda *, text: document
+    monkeypatch.setitem(sys.modules, "presentation_ml", module)
+    adapter = ModuleAdapter()
+    inputs = {"text": "Доклад. " * 20, "source": {"blocks": []}}
+    assert adapter.invoke("generate", inputs) == document
+    with pytest.raises(AppError) as exc:
+        adapter.invoke("generate", {**inputs, "mode": "comparisons"})
+    assert exc.value.code == "ML_CAPABILITY_UNAVAILABLE"
+
+
 def test_async_revision_and_missing_identity_capability(monkeypatch, document):
     module = types.ModuleType("presentation_ml")
 

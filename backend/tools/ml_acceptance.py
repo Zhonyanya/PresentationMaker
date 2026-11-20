@@ -111,6 +111,7 @@ def main():
         'source_sections_policy': ('headings-v1' if get_prompt_version() in ('v5', 'v6', 'v7')
                                    else 'none'),
         'grounding_policy': 'source-quotes-v1' if get_prompt_version() == 'v7' else 'none',
+        'source_facts_policy': 'addressed-graph-hints-v1',
     }
     cases = json.loads(CASES.read_text(encoding='utf-8'))
     if args.case_ids:
