@@ -71,12 +71,16 @@ def get_prompt_version() -> str:
     return version
 
 
-def build_generation_prompt() -> str:
+def build_generation_prompt(*, planned=False) -> str:
     """Version generation structure separately from factual-content profiles."""
-    rules = files('presentation_ml').joinpath(
-        'prompt_templates', 'generation-wire-v1.txt',
-    ).read_text(encoding='utf-8').strip()
-    return build_prompt('generate') + '\n\n' + rules
+    templates = files('presentation_ml').joinpath('prompt_templates')
+    rules = templates.joinpath('generation-wire-v1.txt').read_text(encoding='utf-8').strip()
+    prompt = build_prompt('generate') + '\n\n' + rules
+    if planned:
+        prompt += '\n\n' + templates.joinpath('deck-plan-wire-v1.txt').read_text(
+            encoding='utf-8',
+        ).strip()
+    return prompt
 
 
 def build_revision_prompt(*, scoped=False) -> str:

@@ -8,6 +8,14 @@ from app.presentations.schemas import Document, normalize_document, validate_rev
 from app.presentations.source_blocks import SOURCE_ADAPTER, source_text
 
 from .capabilities import reject_explicit_structure_change
+from .deck_plan import (
+    GeneratedDeck,
+    complete_plan,
+    merge_intents,
+    plan_evidence,
+    plan_schema,
+    read_intents,
+)
 from .grounding import attach_source_quotes, select_source_passages
 from .prompts import build_generation_prompt, build_revision_prompt, get_prompt_version
 from .source_document import build_source_payload, text_blocks
@@ -116,7 +124,7 @@ def _slide_text(slide, include_title=True):
     return '\n'.join(fragments)
 
 
-def _join_generation_headings(document):
+def _join_generation_headings(document, plans=None):
     """Join an internal heading and its untitled content, retaining visible qualifiers."""
     slides = document['slides']
     joined = [slides[0]]
@@ -135,6 +143,8 @@ def _join_generation_headings(document):
                          'title': heading['title'], 'body': body}
                 if notes:
                     slide['notes'] = notes
+                if plans is not None:
+                    merge_intents(plans, slide, [heading, following])
                 joined.append(slide)
                 index += 2
                 continue
@@ -144,7 +154,7 @@ def _join_generation_headings(document):
     return _normalize(dict(document, slides=joined), True)
 
 
-def _pack_short_generation(document, target_count):
+def _pack_short_generation(document, target_count, plans=None):
     """Combine short adjacent sections verbatim; never truncate or regenerate."""
     if len(document['slides']) <= target_count:
         return document
@@ -166,12 +176,15 @@ def _pack_short_generation(document, target_count):
         notes = [s['title'] + '\n' + s['notes'] for s in content[start:end] if s.get('notes')]
         if notes:
             slide['notes'] = '\n\n'.join(notes)
+        if plans is not None:
+            slide['id'] = content[start]['id']
+            merge_intents(plans, slide, content[start:end])
         packed.append(slide)
     return _normalize(dict(document, slides=[document['slides'][0], *packed,
                                             document['slides'][-1]]), True)
 
 
-def _fit_generation_budget(document, target_count):
+def _fit_generation_budget(document, target_count, plans=None):
     """Fit an ordered partition of content without losing text or boundary slots."""
     document = copy.deepcopy(document)
     slides = document['slides']
@@ -216,7 +229,13 @@ def _fit_generation_budget(document, target_count):
     chosen = partition(0, target_count - 2)
     if chosen is None:
         raise ValueError('Generated document exceeds readable slide budget')
-    document['slides'] = [slides[0], *(group(a, b)[0] for a, b in chosen[1]), slides[-1]]
+    fitted = []
+    for start, stop in chosen[1]:
+        slide = group(start, stop)[0]
+        if plans is not None and stop > start + 1:
+            merge_intents(plans, slide, content[start:stop])
+        fitted.append(slide)
+    document['slides'] = [slides[0], *fitted, slides[-1]]
     return document
 
 
@@ -235,7 +254,7 @@ def _fill_generation_closing(document, *, recap_slides):
             if replace_title:
                 closing['title'] = slide['title']
             closing['subtitle'] = recap
-            return
+            return slide
     raise ValueError('Generated document has no readable closing recap')
 
 
@@ -261,11 +280,22 @@ def _generate_comparisons(source, title, slide_count, deadline):
 def generate(
     *, text, slideCount, job_id, deadline, title=None, page_passages=None, source=None, mode=None,
 ):
+    return _generate(
+        text=text, slideCount=slideCount, job_id=job_id, deadline=deadline, title=title,
+        page_passages=page_passages, source=source, mode=mode,
+    ).document
+
+
+def _generate(
+    *, text, slideCount, job_id, deadline, title=None, page_passages=None, source=None, mode=None,
+) -> GeneratedDeck:
     timeout = remaining_seconds(deadline)
     if source is not None:
         source = SOURCE_ADAPTER.validate_python(source)
         if mode == 'comparisons':
-            return _generate_comparisons(source, title or 'Доклад', slideCount, deadline)
+            return GeneratedDeck(
+                _generate_comparisons(source, title or 'Доклад', slideCount, deadline)
+            )
         text = source_text(source)
     version = get_prompt_version()
     if page_passages is not None:
@@ -296,10 +326,16 @@ def generate(
     if title is not None:
         payload["title"] = title
     facts = build_source_payload(source or text_blocks(text))
-    system = build_generation_prompt()
+    planned = source is not None and version == 'v4'
+    system = build_generation_prompt(planned=planned)
     if facts['source_facts']:
         payload.update(facts)
         system += SOURCE_FACTS_INSTRUCTION
+    if planned:
+        annotated_text, anchors, references = plan_evidence(source, facts['source_facts'])
+        payload['text'] = annotated_text
+        payload['source_anchors'] = anchors
+        plan_schema(schema, target_count)
     result = request_document(
         system=system,
         payload=payload, schema=schema, timeout=timeout,
@@ -307,23 +343,43 @@ def generate(
     remaining_seconds(deadline)
     if version == 'v7':
         result = attach_source_quotes(result, text, page_passages=page_passages)
-    normalized = _join_generation_headings(_normalize(result, True))
+    intents = read_intents(result, references) if planned else ()
+    normalized = _normalize(result, True)
+    plans = None
+    if planned:
+        offset = int(result['slides'][0].get('layout') != 'title')
+        draft_slides = normalized['slides'][offset:offset + len(intents)]
+        plans = {
+            slide['id']: (intent,) for slide, intent in zip(draft_slides, intents, strict=True)
+        }
+    normalized = _join_generation_headings(normalized, plans)
     recap_slides = normalized['slides'][1:-1]
+    recap_plans = plans.copy() if plans is not None else {}
+    if plans is not None:
+        recap_slides = [
+            slide for slide in recap_slides
+            if any(intent.evidence for intent in recap_plans[slide['id']])
+        ]
     if short_budget:
-        normalized = _pack_short_generation(normalized, target_count)
+        normalized = _pack_short_generation(normalized, target_count, plans)
     else:
-        normalized = _fit_generation_budget(normalized, target_count)
+        normalized = _fit_generation_budget(normalized, target_count, plans)
     # Structural normalization may have inserted missing boundary slides.
     # Reject overflow instead of silently publishing N+1 or discarding content.
     if len(normalized['slides']) > target_count:
         raise ValueError('Generated document exceeds requested slide budget')
     # Detect the synthesized document-title placeholder before an explicit title
     # replaces the model's document title.
-    _fill_generation_closing(normalized, recap_slides=recap_slides)
+    recap = _fill_generation_closing(normalized, recap_slides=recap_slides)
     cover_title = title.strip() if title and title.strip() else normalized['title']
     normalized['title'] = cover_title
     normalized['slides'][0]['title'] = cover_title
-    return _normalize(normalized, True)
+    document = _normalize(normalized, True)
+    if plans is None:
+        return GeneratedDeck(document)
+    return GeneratedDeck(
+        document, complete_plan(document, plans, recap_plans[recap['id']] if recap else None),
+    )
 
 
 def revise(*, document, text, slideCount, instruction, target_slide_numbers,

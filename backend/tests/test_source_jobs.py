@@ -29,7 +29,7 @@ def test_generate_accepts_structured_input_without_requiring_a_second_copy_of_te
     assert request.source.blocks[1].rows[2] == ("Школы", "20", "35")
 
 
-def test_generate_sends_full_prose_alongside_table_facts(monkeypatch, document):
+def test_generate_sends_full_prose_alongside_table_facts(monkeypatch):
     captured = {}
     text = "Архив доступен только по предварительной записи."
     source = {"blocks": [*SOURCE["blocks"], {"id": "tail", "kind": "text", "text": text}]}
@@ -37,13 +37,22 @@ def test_generate_sends_full_prose_alongside_table_facts(monkeypatch, document):
 
     def respond(**request):
         captured.update(request["payload"])
+        intent = {
+            "goal": "Описать участие", "takeaway": "Условия указаны в приложении.",
+            "visual_intent": "Краткая сводка", "evidence_ids": [],
+        }
         return {
-            "title": document["title"],
-            "slides": [document["slides"][0], document["slides"][-1]],
+            "title": "Учебный отчёт",
+            "plan": [intent, {**intent, "evidence_ids": ["fact-1"]}, intent],
+            "slides": [
+                {"layout": "title", "title": "Учебный отчёт"},
+                {"layout": "text", "title": "Школы", "body": "2022 — 20; 2023 — 35"},
+                {"layout": "closing", "title": "Учебный отчёт"},
+            ],
         }
 
     monkeypatch.setattr(presentation_ml, "request_document", respond)
-    presentation_ml.generate(
+    result = presentation_ml._generate(
         text=text, source=source, slideCount=6, job_id="test",
         deadline=(datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
     )
@@ -51,6 +60,8 @@ def test_generate_sends_full_prose_alongside_table_facts(monkeypatch, document):
     (fact,) = captured["source_facts"]
     assert fact["source"] == {"block_id": "docx-2", "table_number": "18", "row": 3}
     assert fact["source_row"] == ["Школы", "20", "35"]
+    (evidence,) = result.plan.slides[1].intents[0].evidence
+    assert (evidence.id, evidence.block_id, evidence.row) == ("fact-1", "docx-2", 3)
 
 
 def test_generate_comparisons_uses_requested_slide_budget(monkeypatch):
