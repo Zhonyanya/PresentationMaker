@@ -81,7 +81,23 @@ export interface TableMerge {
   colspan: number
 }
 
-export type SceneElement = SceneRect | SceneText | SceneImage | SceneTable
+export interface SceneChart {
+  type: 'chart'
+  box: Box
+  categories: string[]
+  series: { label: string; values: number[]; color: string }[]
+  unit?: '%'
+  maximum: number
+  interval: number
+  decimals: number
+  valueDecimals: number
+  fontFace: string
+  textColor: string
+  gridColor: string
+  labelSize: number
+}
+
+export type SceneElement = SceneRect | SceneText | SceneImage | SceneTable | SceneChart
 
 export interface SlideScene {
   background: string

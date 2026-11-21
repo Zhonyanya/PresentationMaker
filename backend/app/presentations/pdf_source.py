@@ -96,12 +96,20 @@ class SourceFigure:
 
 
 @dataclass(frozen=True)
+class SourceParagraph:
+    top: float
+    left: float
+    text: str
+
+
+@dataclass(frozen=True)
 class SourcePage:
     number: int
     text: str
     tables: tuple[SourceTable, ...]
     images: tuple[tuple[float, float, float, float], ...]
     figures: tuple[SourceFigure, ...] = ()
+    paragraphs: tuple[SourceParagraph, ...] = ()
 
 
 def _contains(outer, inner):
@@ -119,6 +127,7 @@ _CAPTION = re.compile(
     re.I | re.M,
 )
 _TABLE_CAPTION = re.compile(r'^[ \t]*таблица[ \t]*(?:№[ \t]*)?(\d+)\b', re.I | re.M)
+_LIST_ITEM = re.compile(r'^(?:[•●▪◦‣]|[-–—]|\d{1,3}[.)])\s+')
 
 
 def _table_number(page, bounds):
@@ -202,6 +211,28 @@ def _page_illustrations(page, seen_images):
     return tuple(figures), tuple(images)
 
 
+def _prose_paragraphs(lines) -> tuple[SourceParagraph, ...]:
+    """Join visual line wraps while retaining spacing and type-size breaks."""
+    paragraphs = []
+    group = []
+    for line in lines:
+        if group:
+            previous = group[-1]
+            heights = [line['bottom'] - line['top'], previous['bottom'] - previous['top']]
+            if (line['top'] - previous['top'] > 1.65 * max(heights)
+                    or abs(heights[0] - heights[1]) > 0.22 * max(heights)
+                    or _LIST_ITEM.match(line['text'])):
+                paragraphs.append(group)
+                group = []
+        group.append(line)
+    if group:
+        paragraphs.append(group)
+    return tuple(
+        SourceParagraph(group[0]['top'], group[0]['x0'], ' '.join(line['text'] for line in group))
+        for group in paragraphs
+    )
+
+
 def read_pdf(source: BinaryIO, *, max_pages: int = 250) -> tuple[SourcePage, ...]:
     """Extract positioned materials without flattening table cells into prose."""
     result = []
@@ -228,8 +259,10 @@ def read_pdf(source: BinaryIO, *, max_pages: int = 250) -> tuple[SourcePage, ...
                     for x0, top, x1, bottom in excluded
                 ),
             )
+            lines = prose.extract_text_lines(return_chars=False)
             result.append(SourcePage(
-                page.page_number, prose.extract_text(), tables, images, figures,
+                page.page_number, '\n'.join(line['text'] for line in lines), tables, images, figures,
+                _prose_paragraphs(lines),
             ))
             page.close()
     return tuple(result)

@@ -12,9 +12,10 @@ SOURCE = {"blocks": [
 ]}
 
 
-def intent(takeaway, *evidence_ids):
+def intent(takeaway, *evidence_ids, visual_kind="text"):
     return {"goal": "Объяснить порядок доступа", "takeaway": takeaway,
-            "visual_intent": "Порядок посещения", "evidence_ids": list(evidence_ids)}
+            "visual_intent": "Порядок посещения", "visual_kind": visual_kind,
+            "evidence_ids": list(evidence_ids)}
 
 
 def planned_generation(monkeypatch, reply, *, slide_count=5, inspect_request=None, source=SOURCE):
@@ -42,6 +43,9 @@ def test_generation_binds_intent_to_source_without_graph_facts(monkeypatch):
         anchors = request["payload"]["source_anchors"]
         assert [anchor["source"]["block_id"] for anchor in anchors] == ["p1-text", "p2-text"]
         assert "plan" in request["schema"]["required"]
+        assert "2–4 конкретные детали в видимом тексте" in request["system"]
+        assert "Не своди разные случаи к общему тезису" in request["system"]
+        assert "Не прячь существенные условия в notes" in request["system"]
 
     result = planned_generation(monkeypatch, {
         "title": "Архив",
@@ -173,3 +177,93 @@ def test_compaction_rejects_content_without_evidence_even_after_layout_changes(m
                 {"layout": "closing", "title": "Часы работы", "subtitle": "Выдача до 14:00."},
             ],
         }, slide_count=3)
+
+
+@pytest.mark.parametrize("visual_kind", ["comparison", "text"])
+def test_plan_comparison_requires_explicit_intent(monkeypatch, visual_kind):
+    source = {"blocks": [{
+        "kind": "table", "id": "p1-table-1", "page": 1,
+        "rows": [["Группа", "Завершённые занятия", None], [None, "2024", "2025"],
+                 ["Северная", "48", "63"], ["Центральная", "72", "69"]],
+    }]}
+    result = planned_generation(monkeypatch, {
+        "title": "Пилот",
+        "plan": [intent("Число занятий изменилось", "fact-2", "fact-1", visual_kind=visual_kind)],
+        "slides": [{"layout": "section", "title": "Две площадки", "subtitle": "Итоги пилота"}],
+    }, source=source)
+    slide = result.document["slides"][1]
+    if visual_kind == "text":
+        assert slide["layout"] == "section"
+        assert "composition" not in slide
+        return
+    assert slide["layout"] == "text" and slide["body"] == "Итоги пилота"
+    assert slide["id"] == result.plan.slides[1].slide_id
+    assert slide["composition"] == {
+        "kind": "comparison",
+        "categories": ["Северная", "Центральная"],
+        "series": [{"label": "2024", "values": [48, 72]}, {"label": "2025", "values": [63, 69]}],
+    }
+
+
+def test_plan_metric_copies_verified_row_and_preserves_context(monkeypatch):
+    source = {"blocks": [{
+        "kind": "table", "id": "p1-table-1", "page": 1,
+        "rows": [["Группа", "Доля ответов", None], [None, "2024", "2025"],
+                 ["Онлайн", "48 %", "63 %"]],
+    }]}
+    result = planned_generation(monkeypatch, {
+        "title": "Пилот",
+        "plan": [intent("Ответы онлайн", "fact-1", visual_kind="metric")],
+        "slides": [{"layout": "text", "title": "Онлайн", "body": "Электронная форма."}],
+    }, source=source)
+    slide = result.document["slides"][1]
+    assert slide["body"] == "Электронная форма."
+    assert slide["composition"] == {"kind": "metric", "values": [
+        {"label": "Доля ответов · Онлайн · 2024", "value": "48 %"},
+        {"label": "Доля ответов · Онлайн · 2025", "value": "63 %"},
+    ]}
+
+
+@pytest.mark.parametrize(("kind", "body", "expected"), [
+    ("lead", "Главный вывод.\nОснование и условия вывода.", "lead"),
+    ("blocks", "Первое наблюдение.\nВторое наблюдение.", "blocks"),
+    ("steps", "Подать заявку.\nПолучить подтверждение.\nЗабрать документы.", "steps"),
+    ("steps", "Один факт без последовательности.", None),
+])
+def test_plan_assigns_text_composition_without_rewriting_text(monkeypatch, kind, body, expected):
+    def inspect(request):
+        assert "textStyle" not in request["schema"]["$defs"]["TextSlide"]["properties"]
+
+    result = planned_generation(monkeypatch, {
+        "title": "Архив",
+        "plan": [intent("Объяснить порядок доступа", "block-1", visual_kind=kind)],
+        "slides": [{"layout": "text", "title": "Условия", "body": body, "textStyle": "steps"}],
+    }, inspect_request=inspect)
+    slide = result.document["slides"][1]
+    assert slide["body"] == body
+    assert slide.get("textStyle") == expected
+
+
+def test_revision_of_body_keeps_source_owned_composition(monkeypatch):
+    composition = {
+        "kind": "metric", "values": [
+            {"label": "2024", "value": "5 дней"}, {"label": "2025", "value": "4 дня"},
+        ],
+    }
+    slide = {"id": "s1", "layout": "text", "title": "Ожидание", "body": "Замер по форме."}
+    document = {"title": "Пилот", "slides": [{**slide, "composition": composition}]}
+
+    def respond(**request):
+        assert "composition" not in request["schema"]["$defs"]["TextSlide"]["properties"]
+        return {"status": "applied", "document": {
+            "title": "Пилот", "slides": [{**slide, "body": "Электронная форма."}],
+        }}
+
+    monkeypatch.setattr(presentation_ml, "request_document", respond)
+    result = presentation_ml.revise(
+        document=document, text="Доклад", slideCount=3, instruction="Уточни формулировку",
+        target_slide_numbers=[1], target_slide_ids=["s1"], job_id="test",
+        deadline=(datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+    )
+    assert result["slides"] == [{**slide, "body": "Электронная форма.", "composition": composition}]
+    assert document["slides"][0]["body"] == "Замер по форме."

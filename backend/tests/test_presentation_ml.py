@@ -227,6 +227,90 @@ def test_global_revision_can_change_title(monkeypatch, ml, inputs, document):
     assert revise(ml, inputs, document)["title"] == "Новое название"
 
 
+def test_text_presentation_style_does_not_restrict_command_revision(monkeypatch, ml, inputs):
+    document = {"title": "Архив", "slides": [{
+        "id": "access", "layout": "text", "title": "Запись",
+        "body": "Запись до 14:00.", "textStyle": "lead",
+    }]}
+    response = {"title": "Архив", "slides": [{
+        "id": "access", "layout": "text", "title": "Запись",
+        "body": "Запись до 15:00.", "textStyle": "steps",
+    }]}
+    provider(monkeypatch, ml, response)
+    revised = revise(ml, inputs, document, [1])
+    assert revised["slides"] == [{**response["slides"][0], "textStyle": "lead"}]
+
+
+@pytest.fixture
+def comparison_document():
+    return {"title": "Пилот", "slides": [
+        {"id": "cover", "layout": "title", "title": "Пилот"},
+        {"id": "data", "layout": "text", "title": "Занятия по площадкам",
+         "body": "Северная площадка провела 63 занятия в 2025 году. Подробности в отчёте.",
+         "composition": {
+             "kind": "comparison", "categories": ["Северная", "Центральная"],
+             "series": [{"label": "2024", "values": [48, 72]},
+                        {"label": "2025", "values": [63, 69]}],
+         }},
+        {"id": "end", "layout": "closing", "title": "Итог", "subtitle": "Данные пилота"},
+    ]}
+
+
+@pytest.mark.parametrize("generation", [True, False])
+@pytest.mark.parametrize("composition", [None, {"kind": "unexpected"}])
+def test_provider_cannot_supply_structured_visuals(monkeypatch, ml, inputs,
+                                                   comparison_document, generation, composition):
+    candidate = copy.deepcopy(comparison_document)
+    candidate["slides"][1].update(sourceMaterial={"kind": "table", "page": 1,
+        "rows": [["Группа", "Занятия"], ["Северная", "99"]]}, composition=composition)
+    provider(monkeypatch, ml, candidate)
+    result = (ml.generate(**inputs) if generation else
+              revise(ml, inputs, comparison_document, [2]))
+    assert "sourceMaterial" not in result["slides"][1]
+    expected = None if generation else comparison_document["slides"][1]["composition"]
+    assert result["slides"][1].get("composition") == expected
+
+
+def test_revision_preserves_saved_source_table(monkeypatch, ml, inputs, comparison_document):
+    slide = comparison_document["slides"][1]
+    slide.pop("composition")
+    slide["sourceMaterial"] = {
+        "kind": "table", "page": 1, "rows": [["Площадка", "Итог"], ["Северная", "63"]],
+    }
+    candidate = copy.deepcopy(comparison_document)
+    candidate["slides"][1].pop("sourceMaterial")
+    candidate["slides"][1]["title"] = "Итоги"
+    provider(monkeypatch, ml, candidate)
+    revised = revise(ml, inputs, comparison_document, [2])
+    assert revised["slides"][1]["title"] == "Итоги"
+    assert revised["slides"][1]["sourceMaterial"] == slide["sourceMaterial"]
+
+
+@pytest.mark.parametrize("body", [
+    "Северная площадка провела 69 занятий в 2025 году.",
+    "Северная площадка провела 63 занятия в 2024 году.",
+    "Центральная площадка провела 63 занятия в 2025 году.",
+    "Северная площадка провела 63% занятий в 2025 году.",
+])
+def test_revision_rejects_changed_numeric_statement(monkeypatch, ml, inputs,
+                                                   comparison_document, body):
+    candidate = copy.deepcopy(comparison_document)
+    candidate["slides"][1]["body"] = body
+    provider(monkeypatch, ml, candidate)
+    with pytest.raises(NotImplementedError, match="numeric"):
+        revise(ml, inputs, comparison_document, [2])
+
+
+def test_revision_can_shorten_around_numeric_statement(monkeypatch, ml, inputs,
+                                                      comparison_document):
+    candidate = copy.deepcopy(comparison_document)
+    candidate["slides"][1]["body"] = "Северная площадка провела 63 занятия в 2025 году."
+    candidate["slides"][1]["title"] = "Результаты площадок"
+    provider(monkeypatch, ml, candidate)
+    revised = revise(ml, inputs, comparison_document, [2])
+    assert revised == candidate
+
+
 def test_revision_rejects_identity_changes(monkeypatch, ml, inputs, document):
     result = copy.deepcopy(document)
     result["slides"].reverse()
@@ -311,7 +395,7 @@ def test_sdk_transport_disables_retries_and_validates_payload(monkeypatch, docum
     ("length", "{}", RuntimeError),
     ("blacklist", "{}", RuntimeError),
     ("stop", "not JSON", ValueError),
-    ("stop", "x" * 8_000_001, ValueError),
+    pytest.param("stop", "x" * 8_000_001, ValueError, id="oversize-response"),
 ])
 def test_transport_rejects_incomplete_or_invalid_output(monkeypatch, reason, content, error):
     from types import SimpleNamespace

@@ -36,9 +36,16 @@ export function buildSlideScene(slide: Slide, ctx: RenderContext): SlideScene {
 /** Контекст рендера для каждого слайда: номер, общий счётчик, номер раздела. */
 export function buildRenderContexts(slides: Slide[], theme: PresentationTheme): RenderContext[] {
   let section = 0
+  let consecutiveLeads = 0
   return slides.map((slide, index) => {
     if (slide.layout === 'section') section += 1
-    return { theme, number: index + 1, total: slides.length, sectionNumber: Math.max(section, 1) }
+    const isLead = slide.layout === 'text' && slide.body.trim() && !slide.sourceMaterial && !slide.composition
+      && (slide.textStyle === undefined || slide.textStyle === 'lead')
+    consecutiveLeads = isLead ? consecutiveLeads + 1 : 0
+    return {
+      theme, number: index + 1, total: slides.length, sectionNumber: Math.max(section, 1),
+      sideLead: consecutiveLeads > 0 && consecutiveLeads % 2 === 0,
+    }
   })
 }
 

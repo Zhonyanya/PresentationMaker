@@ -3,6 +3,8 @@ import type { LayoutDefinition } from '../types'
 import { contentBox, contentChrome, fittedText, lines } from '../chrome'
 import { nonEmpty, paragraphsOf } from '../content-utils'
 import { sourceImageBox, sourceTable } from '../source-material'
+import { buildComposition, compositionAsText } from '../compositions'
+import { textComposition } from '../text-compositions'
 
 export const textLayout: LayoutDefinition<'text'> = {
   layout: 'text',
@@ -19,10 +21,17 @@ export const textLayout: LayoutDefinition<'text'> = {
       : content.items
     return { title: content.title, body: nonEmpty(items.length ? items : [content.subtitle ?? '']).join('\n') }
   },
-  toContent: (slide) => ({ title: slide.title, items: paragraphsOf(slide.body) }),
+  toContent: (slide) => ({
+    title: slide.title,
+    items: [
+      ...(slide.composition ? compositionAsText(slide.composition) : []),
+      ...paragraphsOf(slide.body),
+    ],
+  }),
   buildScene: (slide, ctx) => {
     const { colors, typography, fonts } = ctx.theme
     const material = slide.sourceMaterial
+    if (!material && slide.composition) return buildComposition(slide, slide.composition, ctx)
     if (material) {
       const box = contentBox(ctx)
       const context = material.kind === 'image' ? lines(slide.body) : []
@@ -52,7 +61,7 @@ export const textLayout: LayoutDefinition<'text'> = {
       background: colors.background,
       elements: [
         ...contentChrome(slide.title, ctx),
-        fittedText({
+        ...(textComposition(slide, ctx) ?? [fittedText({
           field: 'body',
           floor: typography.absoluteMinFontSize,
           box: contentBox(ctx),
@@ -67,7 +76,7 @@ export const textLayout: LayoutDefinition<'text'> = {
             lineSpacing: typography.lineSpacing + 0.1,
             paragraphSpacing: typography.paragraphSpacing + 2,
           },
-        }),
+        })]),
       ],
     }
   },

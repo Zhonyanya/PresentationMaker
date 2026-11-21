@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from app.core.errors import AppError
 from app.presentations.source_blocks import IllustrationBlock, SourceDocument, TableBlock
 from presentation_ml.source_document import build_source_payload
-from presentation_ml.source_reply import TableClaim, verified_table_claim
+from presentation_ml.source_reply import TableClaim, table_comparison_chart, verified_table_claim
 
 from .schemas import Document
 
@@ -102,6 +102,10 @@ def build_comparison_preview(
                 slide['body'] = f'{group}\n{first} · {second}'
                 slide['notes'] += f', {figure.caption}'
                 used_figures.add(figure.id)
+        if 'sourceMaterial' not in slide:
+            composition = table_comparison_chart([claim])
+            if composition is not None:
+                slide['composition'] = composition
         slides.append(slide)
     slides.append({'id': str(uuid4()), 'layout': 'closing', 'title': 'Итоги сравнений'})
     return Document.model_validate({'title': title, 'slides': slides})

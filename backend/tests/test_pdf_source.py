@@ -18,11 +18,12 @@ from app.presentations.pdf_source import (
     source_material_slide,
 )
 from app.presentations.schemas import GenerateRequest
-from app.presentations.source_blocks import SOURCE_ADAPTER
+from app.presentations.source_blocks import SOURCE_ADAPTER, TextBlock, source_text
 
 
 def grid_pdf(
     right_column: tuple[str, ...], left_column: tuple[str, ...] = ("First line", "Second line"),
+    *, add_prose: bool = False,
 ) -> BytesIO:
     """A ruled grid with text placed independently in each cell."""
     rows = len(right_column)
@@ -33,11 +34,19 @@ def grid_pdf(
         y = top - 26 - index * 50
         commands.append(f"BT /F1 12 Tf 30 {y} Td ({left}) Tj ET")
         commands.append(f"BT /F1 12 Tf 160 {y} Td ({right}) Tj ET")
+    if add_prose:
+        commands.extend([
+            f"BT /F1 16 Tf 30 {top + 72} Td (Method) Tj ET",
+            f"BT /F1 12 Tf 30 {top + 43} Td (Results use a complete year.) Tj ET",
+            f"BT /F1 12 Tf 30 {top + 27} Td (Cancelled sessions were excluded.) Tj ET",
+            "BT /F1 12 Tf 30 30 Td (Phone bookings were not measured.) Tj ET",
+            "BT /F1 12 Tf 30 14 Td (- Walk-ins were still accepted.) Tj ET",
+        ])
     drawing = "\n".join(commands).encode("ascii")
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 {top + 40}] ".encode()
+        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 {top + (100 if add_prose else 40)}] ".encode()
         + b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         f"<< /Length {len(drawing)} >>\nstream\n".encode() + drawing + b"\nendstream",
@@ -77,6 +86,21 @@ def test_pdf_source_round_trips_as_a_generation_request():
     generation = GenerateRequest.model_validate({"source": source, "slideCount": 5})
     (table,) = generation.source.blocks
     assert (table.id, table.page, table.rows[1]) == ("p1-table-1", 1, ("Second line", "23"))
+
+
+def test_pdf_source_keeps_paragraphs_and_tables_in_reading_order():
+    parsed = read_pdf_source(grid_pdf(("Count", "23"), add_prose=True))
+    assert [block.kind for block in parsed.blocks] == ["text", "text", "table", "text", "text"]
+    heading, method, table, limitation, access = parsed.blocks
+    assert heading.text == "Method"
+    assert method.text == "Results use a complete year. Cancelled sessions were excluded."
+    assert table.id == "p1-table-1"
+    assert limitation.text == "Phone bookings were not measured."
+    assert access.text == "- Walk-ins were still accepted."
+    assert all(block.page == 1 for block in parsed.blocks)
+    assert len({block.id for block in parsed.blocks if isinstance(block, TextBlock)}) == 4
+    text = source_text(parsed)
+    assert text.index("Cancelled sessions") < text.index("Second line") < text.index("Phone bookings")
 
 
 def test_dense_grid_uses_the_crop_fallback():

@@ -91,6 +91,45 @@ function addElement(pptx: PptxGenJS, slide: PptxSlide, element: SceneElement) {
       })
       break
     }
+    case 'chart': {
+      const numberFormat = (decimals: number) => '0' + (decimals ? `.${'#'.repeat(decimals)}` : '')
+        + (element.unit ? `"${element.unit}"` : '')
+      slide.addChart(pptx.ChartType.bar, element.series.map((series) => ({
+        name: sanitizeText(series.label),
+        labels: element.categories.map(sanitizeText),
+        values: series.values,
+      })), {
+        ...element.box,
+        layout: { x: 0.11, y: 0.15, w: 0.86, h: 0.67 },
+        barDir: 'col',
+        barGrouping: 'clustered',
+        chartColors: element.series.map((series) => hex(series.color)),
+        showLegend: true,
+        legendPos: 't',
+        legendFontFace: element.fontFace,
+        legendFontSize: element.labelSize,
+        legendColor: hex(element.textColor),
+        showValue: true,
+        dataLabelFormatCode: numberFormat(element.valueDecimals),
+        dataLabelColor: hex(element.textColor),
+        dataLabelFontFace: element.fontFace,
+        dataLabelFontSize: element.labelSize,
+        catAxisLabelFontFace: element.fontFace,
+        catAxisLabelFontSize: element.labelSize,
+        catAxisLabelColor: hex(element.textColor),
+        catAxisLineShow: false,
+        catAxisMajorTickMark: 'none',
+        valAxisLabelFontFace: element.fontFace,
+        valAxisLabelFontSize: element.labelSize,
+        valAxisLabelColor: hex(element.textColor),
+        valAxisLabelFormatCode: numberFormat(element.decimals),
+        valAxisLineShow: false,
+        valAxisMajorTickMark: 'none',
+        valAxisMinVal: 0,
+        valGridLine: { color: hex(element.gridColor), size: 0.5 },
+      })
+      break
+    }
     case 'text':
       addText(slide, element)
       break

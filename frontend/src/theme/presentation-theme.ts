@@ -69,6 +69,8 @@ export interface PresentationTheme {
     sectionTitle: FontSizeRange
     heading: FontSizeRange
     columnHeading: number
+    metricValue: FontSizeRange
+    chartLabel: number
     body: FontSizeRange
     bullets: FontSizeRange
     footer: number
@@ -141,6 +143,8 @@ export const presentationTheme: PresentationTheme = {
     sectionTitle: { max: 40, min: 26 },
     heading: { max: 30, min: 20 },
     columnHeading: 18,
+    metricValue: { max: 64, min: 36 },
+    chartLabel: 13,
     body: { max: 20, min: 12 },
     bullets: { max: 22, min: 12 },
     footer: 10,

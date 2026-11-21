@@ -10,7 +10,7 @@ from app.presentations.source_blocks import (
     TextBlock,
 )
 
-from .pdf_source import SourcePage, read_pdf
+from .pdf_source import SourcePage, SourceParagraph, read_pdf
 
 
 def read_pdf_source(source: BinaryIO) -> SourceDocument:
@@ -22,19 +22,24 @@ def pdf_blocks(pages: tuple[SourcePage, ...]) -> SourceDocument:
     blocks = []
     for page in pages:
         prefix = f'p{page.number}'
-        if page.text:
-            blocks.append(TextBlock(f'{prefix}-text', page.text, page.number))
+        positioned = []
+        paragraphs = page.paragraphs or ((SourceParagraph(0, 0, page.text),) if page.text else ())
+        for index, paragraph in enumerate(paragraphs, 1):
+            identifier = f'{prefix}-text' if index == 1 else f'{prefix}-text-{index}'
+            positioned.append((paragraph.top, paragraph.left,
+                               TextBlock(identifier, paragraph.text, page.number)))
         for index, table in enumerate(page.tables, 1):
-            blocks.append(TableBlock(
+            positioned.append((table.bounds[1], table.bounds[0], TableBlock(
                 f'{prefix}-table-{index}', table.rows, page.number, table.number,
-            ))
+            )))
         illustrations = [
             (figure.bounds, figure.caption or figure.reference) for figure in page.figures
         ]
         illustrations.extend((bounds, '') for bounds in page.images)
         for index, (bounds, caption) in enumerate(illustrations, 1):
             locator = ','.join(str(value) for value in bounds)
-            blocks.append(IllustrationBlock(
+            positioned.append((bounds[1], bounds[0], IllustrationBlock(
                 f'{prefix}-figure-{index}', locator, caption, page.number,
-            ))
+            )))
+        blocks.extend(block for _, _, block in sorted(positioned, key=lambda item: item[:2]))
     return SourceDocument(tuple(blocks))

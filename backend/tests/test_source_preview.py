@@ -35,6 +35,11 @@ def test_preview_keeps_address_and_checks_responder_against_authoritative_packet
     deck = build_comparison_preview(source, 'Доклад', 3, propose=respond)
     assert deck.slides[1].body == 'Школы\n2022 — 20\n2023 — 35'
     assert deck.slides[1].notes == 'Источник — стр. 76, таблица 18, блок p76-table-1, строка 3'
+    assert deck.slides[1].composition.model_dump(exclude_none=True) == {
+        'kind': 'comparison',
+        'categories': ['Школы'],
+        'series': [{'label': '2022', 'values': [20]}, {'label': '2023', 'values': [35]}],
+    }
 
 
 def test_pdf_preview_rejects_comparison_requests():
@@ -106,3 +111,22 @@ def test_comparison_uses_only_chart_linked_by_same_statement(linked):
     assert (deck.slides[1].sourceMaterial is not None) is linked
     assert deck.slides[2].sourceMaterial is None
     assert ('Диаграмма 1' in deck.slides[1].notes) is linked
+    assert (deck.slides[1].composition is None) is linked
+
+
+@pytest.mark.parametrize('value', ['-2', '1,234'])
+def test_ambiguous_or_negative_comparison_stays_in_literal_text(value):
+    source = SourceDocument((TableBlock('table', (
+        ('Группа', 'Отклонение', None), (None, '2022', '2023'), ('Школы', value, '3'),
+    )),))
+
+    def respond(payload, _schema):
+        (fact,) = payload['source_facts']
+        return {'comparisons': [{
+            'fact_id': fact['id'], 'group': fact['subject'], 'metric': fact['target'],
+            **fact['qualifiers'],
+        }]}
+
+    slide = build_comparison_preview(source, 'Доклад', 3, propose=respond).slides[1]
+    assert slide.composition is None
+    assert slide.body == f'Школы\n2022 — {value}\n2023 — 3'

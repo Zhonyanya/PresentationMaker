@@ -1,6 +1,7 @@
 """Contract-compatible presentation generation; import performs no provider work."""
 
 import copy
+import re
 from datetime import UTC, datetime
 from functools import lru_cache
 
@@ -10,6 +11,7 @@ from app.presentations.source_blocks import SOURCE_ADAPTER, source_text
 from .capabilities import reject_explicit_structure_change
 from .deck_plan import (
     GeneratedDeck,
+    apply_plan_compositions,
     complete_plan,
     merge_intents,
     plan_evidence,
@@ -23,6 +25,8 @@ from .transport import request_document
 
 PRESERVES_SLIDE_IDS = True
 SUPPORTS_SOURCE_DOCUMENT = True
+SOURCE_VISUAL_FIELDS = ('sourceMaterial', 'composition')
+SERVER_LAYOUT_FIELDS = (*SOURCE_VISUAL_FIELDS, 'textStyle')
 
 SOURCE_FACTS_INSTRUCTION = (
     '\n\nПоле source_facts содержит отдельные проверяемые подсказки к исходному тексту. '
@@ -45,9 +49,14 @@ def remaining_seconds(deadline):
 def _schema(revision=False, slide_count=None, grounded=False, slide_ids=None, frozen_title=None):
     schema = Document.model_json_schema()
     definitions = schema.get('$defs', {})
-    definitions.get('TextSlide', {}).get('properties', {}).pop('sourceMaterial', None)
-    definitions.pop('SourceTableMaterial', None)
-    definitions.pop('SourceImageMaterial', None)
+    text_fields = definitions.get('TextSlide', {}).get('properties', {})
+    for field in SERVER_LAYOUT_FIELDS:
+        text_fields.pop(field, None)
+    for definition in (
+        'SourceTableMaterial', 'SourceImageMaterial', 'ChartSeries', 'ComparisonComposition',
+        'MetricValue', 'MetricComposition', 'Caveat', 'CaveatsComposition',
+    ):
+        definitions.pop(definition, None)
     # Optional fields must be omitted, never returned as null.
     def clean(node):
         if isinstance(node, dict):
@@ -101,14 +110,41 @@ def _schema(revision=False, slide_count=None, grounded=False, slide_ids=None, fr
 
 
 def _normalize(result, generation):
-    if (generation and isinstance(result, dict) and isinstance(result.get("slides"), list)
-            and result["slides"] and all(isinstance(s, dict) for s in result["slides"])):
-        result = copy.deepcopy(result)
-        if result["slides"][0].get("layout") != "title":
-            result["slides"].insert(0, {"layout": "title", "title": result.get("title")})
-        if result["slides"][-1].get("layout") != "closing":
-            result["slides"].append({"layout": "closing", "title": result.get("title")})
+    if isinstance(result, dict) and isinstance(result.get('slides'), list):
+        slides = [
+            {key: value for key, value in slide.items() if key not in SERVER_LAYOUT_FIELDS}
+            if isinstance(slide, dict) else slide
+            for slide in result['slides']
+        ]
+        if generation and slides and all(isinstance(slide, dict) for slide in slides):
+            if slides[0].get('layout') != 'title':
+                slides.insert(0, {'layout': 'title', 'title': result.get('title')})
+            if slides[-1].get('layout') != 'closing':
+                slides.append({'layout': 'closing', 'title': result.get('title')})
+        result = dict(result, slides=slides)
     return normalize_document(result, generation=generation, max_bytes=8_000_000)
+
+
+def _numeric_statements(value):
+    return {
+        ' '.join(statement.split())
+        for statement in re.split(r'\n+|(?<=[.!?])[^\S\n]+', value)
+        if re.search(r'\d', statement)
+    }
+
+
+def _restore_source_visuals(slide, previous):
+    visuals = {key: previous[key] for key in SOURCE_VISUAL_FIELDS if key in previous}
+    if not visuals:
+        return
+    if slide['layout'] != 'text':
+        raise NotImplementedError('Revision cannot convert a slide with structured visuals')
+    # Check complete statements so a retained number cannot acquire a different unit,
+    # period or subject in the same sentence. Only omission and exact reuse are supported.
+    for field in ('title', 'body', 'notes'):
+        if _numeric_statements(slide.get(field, '')) - _numeric_statements(previous.get(field, '')):
+            raise NotImplementedError('Revision cannot rewrite numeric statements alongside structured visuals')
+    slide.update(visuals)
 
 
 def _slide_text(slide, include_title=True):
@@ -377,9 +413,9 @@ def _generate(
     document = _normalize(normalized, True)
     if plans is None:
         return GeneratedDeck(document)
-    return GeneratedDeck(
-        document, complete_plan(document, plans, recap_plans[recap['id']] if recap else None),
-    )
+    plan = complete_plan(document, plans, recap_plans[recap['id']] if recap else None)
+    apply_plan_compositions(document, plan, facts['source_facts'])
+    return GeneratedDeck(document, plan)
 
 
 def revise(*, document, text, slideCount, instruction, target_slide_numbers,
@@ -407,6 +443,15 @@ def revise(*, document, text, slideCount, instruction, target_slide_numbers,
         "response_scope": 'selected_slides' if scoped else 'all_slides',
     }
     system = build_revision_prompt(scoped=scoped)
+    revisions = (slide for slide in original['slides'] if slide['id'] in expected_ids)
+    if any(any(key in slide for key in SOURCE_VISUAL_FIELDS) for slide in revisions):
+        system += (
+            '\nНа целевом слайде с composition или sourceMaterial сохрани макет text. '
+            'Сервер вернёт сохранённый визуал, поэтому не включай эти поля в ответ. '
+            'Предложения с цифрами в заголовке, тексте и заметках переноси дословно '
+            'в том же поле или опускай при сокращении. Если команда требует изменить '
+            'числовое утверждение или визуал, верни status=unsupported.'
+        )
     if source is not None:
         source = SOURCE_ADAPTER.validate_python(source)
         payload['text'] = source_text(source)
@@ -429,6 +474,12 @@ def revise(*, document, text, slideCount, instruction, target_slide_numbers,
         raise NotImplementedError("Unsupported presentation operation")
     current = _normalize(result["document"], False)
     current_ids = [s['id'] for s in current['slides']]
+    previous_by_id = {slide['id']: slide for slide in original['slides']}
+    for slide in current['slides']:
+        previous = previous_by_id.get(slide['id'], {})
+        _restore_source_visuals(slide, previous)
+        if slide['layout'] == 'text' and 'textStyle' in previous:
+            slide['textStyle'] = previous['textStyle']
     if scoped:
         if len(current_ids) != len(expected_ids) or set(current_ids) != set(expected_ids):
             raise ValueError('Revision changed requested slide identities')

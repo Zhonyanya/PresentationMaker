@@ -2,15 +2,19 @@
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.presentations.schemas import text
+from app.presentations.schemas import MetricComposition, text
 from app.presentations.source_blocks import SourceDocument, TextBlock, source_text
+
+from .source_reply import TableClaim, table_comparison_chart
 
 ANCHOR_LIMIT = 32
 TEXT_FRAGMENT_LIMIT = 1200
+VisualKind = Literal['text', 'lead', 'blocks', 'steps', 'comparison', 'metric']
+TEXT_STYLE_LINES = {'lead': (1, 5), 'blocks': (2, 3), 'steps': (2, 4)}
 
 
 class ProposedIntent(BaseModel):
@@ -20,6 +24,7 @@ class ProposedIntent(BaseModel):
     takeaway: text(400, 1, trim=True)
     evidence_ids: Annotated[list[text(32, 1)], Field(max_length=6)]
     visual_intent: text(200, 1, trim=True)
+    visual_kind: VisualKind = 'text'
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,7 @@ class SlideIntent:
     takeaway: str
     evidence: tuple[EvidenceAddress, ...]
     visual_intent: str
+    visual_kind: VisualKind = 'text'
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,8 @@ def plan_schema(schema: dict, slide_count: int) -> None:
     fields = intent['properties']
     for field in ('goal', 'takeaway', 'visual_intent'):
         fields[field]['minLength'] = 1
+    fields['visual_kind'].pop('default')
+    intent['required'].append('visual_kind')
     schema['properties'] = {
         'title': schema['properties']['title'],
         'plan': {
@@ -168,7 +176,7 @@ def read_intents(result: dict, references: dict[str, EvidenceAddress]) -> tuple[
             raise ValueError('Unknown or duplicate plan evidence')
         intents.append(SlideIntent(
             proposal.goal, proposal.takeaway, tuple(references[i] for i in ids),
-            proposal.visual_intent,
+            proposal.visual_intent, proposal.visual_kind,
         ))
     return tuple(intents)
 
@@ -207,3 +215,51 @@ def complete_plan(
             raise ValueError('Missing plan evidence for final slide')
         planned.append(PlannedSlide(slide['id'], intents))
     return DeckPlan(tuple(planned))
+
+
+def apply_plan_compositions(document: dict, plan: DeckPlan, facts: list[dict]) -> None:
+    """Place text according to the plan and build structured visuals from cited rows."""
+    by_id = {fact['id']: fact for fact in facts
+             if fact['relation'] == 'metric_comparison' and fact['status'] == 'reported'}
+    for slide, planned in zip(document['slides'], plan.slides, strict=True):
+        if slide['layout'] not in ('text', 'section') or 'sourceMaterial' in slide:
+            continue
+        kinds = {intent.visual_kind for intent in planned.intents}
+        if len(kinds) != 1:
+            continue
+        (kind,) = kinds
+        if kind in TEXT_STYLE_LINES:
+            if slide['layout'] == 'text':
+                minimum, maximum = TEXT_STYLE_LINES[kind]
+                paragraphs = [line for line in slide['body'].splitlines() if line.strip()]
+                if minimum <= len(paragraphs) <= maximum:
+                    slide['textStyle'] = kind
+            continue
+        if kind == 'text':
+            continue
+        ids = {ref.id for intent in planned.intents for ref in intent.evidence}
+        cited = [by_id[identifier] for identifier in ids if identifier in by_id]
+        if not cited or len({fact['source']['block_id'] for fact in cited}) != 1:
+            continue
+        cited.sort(key=lambda fact: fact['source']['row'])
+        claims = [TableClaim(
+            fact_id=fact['id'], group=fact['subject'], metric=fact['target'], **fact['qualifiers'],
+        ) for fact in cited]
+        composition = None
+        if kind == 'comparison' and len(claims) >= 2:
+            composition = table_comparison_chart(claims)
+        elif kind == 'metric' and len(claims) == 1:
+            claim = claims[0]
+            values = [
+                {'label': f'{claim.metric} · {claim.group} · {period}', 'value': value}
+                for period, value in ((claim.first_period, claim.first_value),
+                                      (claim.second_period, claim.second_value))
+            ]
+            if all(len(item['label'].encode('utf-16-le')) <= 160
+                   and len(item['value'].encode('utf-16-le')) <= 40 for item in values):
+                composition = MetricComposition(kind='metric', values=values).model_dump()
+        if composition:
+            if slide['layout'] == 'section':
+                slide['layout'] = 'text'
+                slide['body'] = slide.pop('subtitle', '')
+            slide['composition'] = composition

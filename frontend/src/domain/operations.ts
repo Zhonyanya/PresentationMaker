@@ -4,6 +4,7 @@ import { getLayout } from '@/layouts/registry'
 import type { LayoutDefinition, SlideContent } from '@/layouts/types'
 import { createId } from './ids'
 import { splitInHalf, paragraphsOf } from '@/layouts/content-utils'
+import { compositionAsText } from '@/layouts/compositions'
 
 /**
  * Чистые операции над презентацией. Не мутируют аргументы —
@@ -92,6 +93,7 @@ function textPieces(slide: Slide): string[] {
     if (typeof value === 'string' && value.trim()) pieces.push(value.trim())
   }
   if (typeof fields.body === 'string') pieces.push(...paragraphsOf(fields.body).map((p) => p.trim()).filter(Boolean))
+  if (slide.layout === 'text' && slide.composition) pieces.push(...compositionAsText(slide.composition))
   for (const key of LIST_FIELDS) {
     const value = fields[key]
     if (Array.isArray(value)) pieces.push(...(value as string[]).map((item) => item.trim()).filter(Boolean))
@@ -193,6 +195,7 @@ export function splitSlide(presentation: Presentation, id: string): { presentati
       const [a, b] = splitInHalf(paragraphs)
       first = { ...slide, body: a.join('\n') }
       second = { ...slide, id: createId(), title: continuationTitle, body: b.join('\n'), notes: '' }
+      delete second.composition
     }
   } else if (slide.layout === 'two-column' && (slide.left.length > 1 || slide.right.length > 1)) {
     const [l1, l2] = splitInHalf(slide.left)

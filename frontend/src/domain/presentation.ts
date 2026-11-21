@@ -76,12 +76,39 @@ const sourceMaterialSchema = z.discriminatedUnion('kind', [
   }),
 ])
 
+const nonEmptyText = (max: number) => z.string().trim().min(1).max(max)
+const compositionSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('comparison'),
+    categories: z.array(nonEmptyText(64)).min(1).max(6),
+    series: z.array(z.object({
+      label: nonEmptyText(40),
+      values: z.array(z.number().min(0).max(1_000_000_000)).min(1).max(6),
+    })).length(2),
+    unit: z.literal('%').optional(),
+  }).refine(({ categories, series }) => new Set(categories).size === categories.length
+    && new Set(series.map((item) => item.label)).size === series.length
+    && series.every((item) => item.values.length === categories.length), {
+    message: 'Категории и ряды диаграммы должны совпадать',
+  }),
+  z.object({
+    kind: z.literal('metric'),
+    values: z.array(z.object({ label: nonEmptyText(80), value: nonEmptyText(20) })).length(2),
+  }),
+  z.object({
+    kind: z.literal('caveats'),
+    items: z.array(z.object({ title: nonEmptyText(80), detail: nonEmptyText(420) })).length(2),
+  }),
+])
+
 export const textSlideSchema = z.object({
   ...slideBase,
   layout: z.literal('text'),
   title: text(LIMITS.titleMax),
   body: text(4000),
   sourceMaterial: sourceMaterialSchema.optional(),
+  composition: compositionSchema.optional(),
+  textStyle: z.enum(['lead', 'blocks', 'steps']).optional(),
 })
 
 export const bulletsSlideSchema = z.object({

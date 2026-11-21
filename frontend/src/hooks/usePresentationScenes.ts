@@ -5,8 +5,8 @@ import type { SlideScene } from '@/layouts/scene'
 import { presentationTheme } from '@/theme/presentation-theme'
 
 /**
- * Сцены всех слайдов. Кэш по объекту слайда: при правке одного слайда
- * остальные сцены (и миниатюры) не пересчитываются и не перерисовываются.
+ * Сцены всех слайдов. Кэш пересчитывает сцену, когда меняется слайд
+ * или его положение и оформление среди соседей.
  */
 const cache = new WeakMap<Slide, { key: string; scene: SlideScene }>()
 
@@ -15,7 +15,7 @@ export function usePresentationScenes(slides: Slide[]): SlideScene[] {
     const contexts = buildRenderContexts(slides, presentationTheme)
     return slides.map((slide, i) => {
       const ctx = contexts[i]
-      const key = `${ctx.number}/${ctx.total}/${ctx.sectionNumber}`
+      const key = `${ctx.number}/${ctx.total}/${ctx.sectionNumber}/${ctx.sideLead}`
       const cached = cache.get(slide)
       if (cached && cached.key === key) return cached.scene
       const scene = buildSlideScene(slide, ctx)

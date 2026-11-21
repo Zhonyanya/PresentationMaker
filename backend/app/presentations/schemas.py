@@ -117,10 +117,57 @@ SourceMaterial = Annotated[
 ]
 
 
+class ChartSeries(Contract):
+    label: text(40, 1, trim=True)
+    values: list[Annotated[float, Field(ge=0, le=1_000_000_000)]]
+
+
+class ComparisonComposition(Contract):
+    kind: Literal["comparison"]
+    categories: Annotated[list[text(64, 1, trim=True)], Field(min_length=1, max_length=6)]
+    series: Annotated[list[ChartSeries], Field(min_length=2, max_length=2)]
+    unit: Literal["%"] | None = None
+
+    @model_validator(mode="after")
+    def comparable_series(self):
+        if (self.series[0].label == self.series[1].label
+                or len(set(self.categories)) != len(self.categories)
+                or any(len(series.values) != len(self.categories) for series in self.series)):
+            raise ValueError("Invalid comparison categories or series")
+        return self
+
+
+class MetricValue(Contract):
+    label: text(80, 1, trim=True)
+    value: text(20, 1, trim=True)
+
+
+class MetricComposition(Contract):
+    kind: Literal["metric"]
+    values: Annotated[list[MetricValue], Field(min_length=2, max_length=2)]
+
+
+class Caveat(Contract):
+    title: text(80, 1, trim=True)
+    detail: text(420, 1, trim=True)
+
+
+class CaveatsComposition(Contract):
+    kind: Literal["caveats"]
+    items: Annotated[list[Caveat], Field(min_length=2, max_length=2)]
+
+
+SlideComposition = Annotated[
+    ComparisonComposition | MetricComposition | CaveatsComposition, Field(discriminator="kind"),
+]
+
+
 class TextSlide(SlideBase):
     layout: Literal["text"]
     body: text(4000)
     sourceMaterial: SourceMaterial | None = None
+    composition: SlideComposition | None = None
+    textStyle: Literal["lead", "blocks", "steps"] | None = None
 
 
 Items = Annotated[list[text(1000)], Field(max_length=12)]

@@ -1,9 +1,10 @@
 import { memo, type CSSProperties } from 'react'
-import type { SceneElement, SceneText, SlideScene } from '@/layouts/scene'
+import type { SceneChart, SceneElement, SceneText, SlideScene } from '@/layouts/scene'
 import { LINE_HEIGHT_FACTOR } from '@/layouts/text-fit'
 import { presentationTheme } from '@/theme/presentation-theme'
 import { cn } from '@/lib/utils'
 import { visibleTableCells } from '@/layouts/source-material'
+import { formatComparisonValue } from '@/layouts/compositions'
 
 /** 1 дюйм слайда = 96 px превью. Слайд 13.333″ × 7.5″ → 1280 × 720 px. */
 export const PX_PER_INCH = 96
@@ -31,6 +32,66 @@ const px = (inches: number) => `${inches * PX_PER_INCH}px`
 
 function boxStyle(element: SceneElement): CSSProperties {
   return { position: 'absolute', left: px(element.box.x), top: px(element.box.y), width: px(element.box.w), height: px(element.box.h) }
+}
+
+function ChartElement({ chart }: { chart: SceneChart }) {
+  const format = new Intl.NumberFormat('ru', { maximumFractionDigits: chart.decimals })
+  const label = (value: number) => formatComparisonValue(value, chart.unit)
+  const tickCount = Math.round(chart.maximum / chart.interval)
+  const summary = chart.categories.map((name, index) => (
+    `${name}: ${chart.series.map((series) => `${series.label} — ${label(series.values[index])}`).join(', ')}`
+  )).join('. ')
+  return (
+    <div role="img" aria-label={summary} style={{
+      ...boxStyle(chart), color: chart.textColor,
+      fontFamily: `'${chart.fontFace}', ${presentationTheme.fonts.cssFallback}`, fontSize: `${chart.labelSize}pt`,
+    }}>
+      <div style={{ display: 'flex', gap: 24, justifyContent: 'center', padding: '6px' }}>
+        {chart.series.map((series) => (
+          <span key={series.label} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ display: 'inline-block', width: 12, height: 12, background: series.color }} />
+            {series.label}
+          </span>
+        ))}
+      </div>
+      <div style={{ position: 'absolute', left: '11%', right: '3%', top: '15%', bottom: '18%' }}>
+        {Array.from({ length: tickCount + 1 }, (_, index) => (
+          <div key={index} style={{
+            position: 'absolute', bottom: `${100 * index / tickCount}%`, width: '100%',
+            borderTop: `1px solid ${chart.gridColor}`,
+          }}>
+            <span style={{
+              position: 'absolute', right: '100%', marginRight: 8, transform: 'translateY(-50%)',
+            }}>{format.format(index * chart.interval)}{chart.unit}</span>
+          </div>
+        ))}
+        <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
+          {chart.categories.map((category, index) => (
+            <div key={category} style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', gap: 4, minWidth: 0 }}>
+              {chart.series.map((series) => {
+                const value = series.values[index]
+                return (
+                  <div key={series.label} style={{
+                    width: '28%', height: `${100 * value / chart.maximum}%`,
+                    background: series.color, position: 'relative', maxWidth: 90,
+                  }}>
+                    <span style={{
+                      position: 'absolute', left: '50%', bottom: '100%', marginBottom: 2,
+                      transform: 'translateX(-50%)', whiteSpace: 'nowrap', fontWeight: 700,
+                    }}>{label(value)}</span>
+                  </div>
+                )
+              })}
+              <span style={{
+                position: 'absolute', top: '100%', marginTop: 7, width: '96%', textAlign: 'center',
+                overflowWrap: 'anywhere', lineHeight: 1.1,
+              }}>{category}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 const VALIGN = { top: 'flex-start', middle: 'center', bottom: 'flex-end' } as const
@@ -135,6 +196,7 @@ export const SlideRenderer = memo(function SlideRenderer({
           if (element.type === 'rect') return <div key={index} style={{ ...boxStyle(element), background: element.fill }} />
           if (element.type === 'image')
             return <img key={index} src={element.src} alt="" style={{ ...boxStyle(element), objectFit: 'contain', objectPosition: 'right center' }} />
+          if (element.type === 'chart') return <ChartElement key={index} chart={element} />
           if (element.type === 'table') {
             return (
               <table key={index} style={{
