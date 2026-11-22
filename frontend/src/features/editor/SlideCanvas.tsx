@@ -109,8 +109,7 @@ export function SlideCanvas({ slide, scene, index, total, activeField, readOnly 
           <p className="flex items-start gap-2 text-destructive">
             <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
             <span>
-              Слишком много текста: шрифт уменьшен ниже рекомендуемого и будет плохо читаться на экране. Сократите текст или разделите
-              слайд.
+              Текст уменьшен или таблица выходит за область содержимого. Проверьте читаемость слайда.
             </span>
           </p>
           {!readOnly && canSplitSlide(slide) && (

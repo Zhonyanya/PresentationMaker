@@ -34,7 +34,7 @@ export const SlideThumbnail = memo(function SlideThumbnail({ slide, scene, index
   }, [selected])
 
   const title = slide.title.trim() || 'Без заголовка'
-  const label = `Слайд ${index + 1}: ${title}. Макет «${getLayout(slide.layout).label}»${overflow ? '. Слишком много текста' : ''}`
+  const label = `Слайд ${index + 1}: ${title}. Макет «${getLayout(slide.layout).label}»${overflow ? '. Переполнение' : ''}`
 
   return (
     <div
@@ -83,7 +83,7 @@ export const SlideThumbnail = memo(function SlideThumbnail({ slide, scene, index
         {overflow && (
           <span className="absolute bottom-1 left-1 inline-flex items-center gap-0.5 rounded bg-white/95 px-1 py-0.5 text-[10px] font-medium text-destructive shadow-xs">
             <TriangleAlert className="size-2.5" aria-hidden />
-            Текст
+            Переполнение
           </span>
         )}
       </div>

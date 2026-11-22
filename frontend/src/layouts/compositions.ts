@@ -2,14 +2,20 @@ import type { TextSlide } from '@/domain/presentation'
 import { contentBox, contentChrome, fittedText, lines } from './chrome'
 import { firstSentence, paragraphsOf } from './content-utils'
 import type { Box, SceneChart, SceneElement, SlideScene } from './scene'
-import { sourceTable } from './source-material'
+import { comparisonTableStyle, sourceTable } from './source-material'
+import { countLines, LINE_HEIGHT_FACTOR } from './text-fit'
 import type { RenderContext } from './types'
 
 type Composition = NonNullable<TextSlide['composition']>
 type Comparison = Extract<Composition, { kind: 'comparison' }>
 const comparisonNumber = new Intl.NumberFormat('ru', { maximumSignificantDigits: 17 })
 
-export function formatComparisonValue(value: number, unit = ''): string {
+export function formatComparisonValue(value: number, unit = '', decimals?: number): string {
+  if (decimals !== undefined) {
+    return new Intl.NumberFormat('ru', {
+      minimumFractionDigits: decimals, maximumFractionDigits: decimals,
+    }).format(value) + unit
+  }
   const formatted = value > 0 && value < 0.000001
     ? value.toExponential().replace('.', ',')
     : comparisonNumber.format(value)
@@ -54,15 +60,30 @@ function comparisonChart(
     (precision) => values.every((value) => Number(value.toFixed(precision)) === value),
   )
   if (valueDecimals === undefined) return undefined
-  const categoryWidth = box.w * 0.86 / composition.categories.length
+  const plotWidth = 0.86
+  const categoryWidth = box.w * plotWidth / composition.categories.length
   // Use the same conservative spacing for browser labels and native PowerPoint charts.
   const charWidth = typography.chartLabel * 0.68 / 72
   const barWidth = Math.min(categoryWidth * 0.28, 90 / 96)
-  if (values.some((value) => formatComparisonValue(value, composition.unit).length * charWidth > barWidth)
-      || composition.categories.some((name) => name.length * charWidth > categoryWidth * 1.8)
+  if (values.some((value) => formatComparisonValue(value, composition.unit, valueDecimals).length * charWidth > barWidth)
       || composition.series.reduce((sum, series) => sum + series.label.length * charWidth + 0.35, 0) > box.w) {
     return undefined
   }
+  const charsPerLabelLine = Math.floor(categoryWidth * 0.96 / (typography.chartLabel * 0.62 / 72))
+  if (composition.categories.some((name) => name.split(/[\s-]+/).some((word) => (
+    word.length > charsPerLabelLine
+  )))) return undefined
+  const labelLines = Math.max(...composition.categories.map((name) => (
+    countLines(name.replace(/-/g, '- '), charsPerLabelLine)
+  )))
+  if (labelLines > 3) return undefined
+  const labelLineHeight = LINE_HEIGHT_FACTOR * typography.chartLabel / 72
+  // The legend and the highest value label each need a line above the plot.
+  const top = Math.max(0.15, (2 * labelLineHeight + 0.19) / box.h)
+  const labelHeight = labelLines * labelLineHeight + 0.12
+  const bottom = Math.max(0.18, labelHeight / box.h)
+  const plotHeight = 1 - top - bottom
+  if (plotHeight * box.h < 4 * labelLineHeight) return undefined
   const largest = Math.max(...values) || 1
   const roughInterval = largest / 4
   const exponent = Math.floor(Math.log10(roughInterval))
@@ -73,12 +94,13 @@ function comparisonChart(
   // Keep room above the highest bar for its value label.
   const maximum = interval * (Math.floor(largest / interval + 1e-9) + 1)
   const decimals = Math.max(0, -exponent + Number(multiplier === 2.5))
-  const axisLabel = new Intl.NumberFormat('ru', { maximumFractionDigits: decimals }).format(maximum)
-  if ((axisLabel.length + (composition.unit?.length ?? 0)) * charWidth + 0.08 > box.w * 0.11) {
+  const axisLabel = formatComparisonValue(maximum, composition.unit, decimals)
+  if (axisLabel.length * charWidth + 0.08 > box.w * 0.11) {
     return undefined
   }
   return {
     type: 'chart', box, categories: composition.categories, unit: composition.unit,
+    plot: { x: 0.11, y: top, w: plotWidth, h: plotHeight },
     series: composition.series.map((series, index) => ({
       ...series, color: index === 0 ? colors.textMuted : colors.accent,
     })),
@@ -93,7 +115,8 @@ function comparisonTable(composition: Comparison, box: Box, ctx: RenderContext) 
     ...composition.categories.map((name, index) => [
       name, ...composition.series.map(({ values }) => formatComparisonValue(values[index], composition.unit)),
     ]),
-  ], box, ctx.theme.fonts.body, ctx.theme.typography.absoluteMinFontSize)
+  ], box, ctx.theme.fonts.body, ctx.theme.typography.absoluteMinFontSize, undefined,
+  comparisonTableStyle(ctx.theme))
 }
 
 function comparisonElements(
@@ -151,8 +174,24 @@ function comparisonElements(
     }
     if (context.some((text) => text.overflow)) continue
     const visualBox = { ...box, h: box.h - height - gap }
-    const visual = wideChart ? { ...wideChart, box: visualBox } : comparisonTable(composition, visualBox, ctx)
-    if (visual.box.h <= visualBox.h) return [visual, ...panel(area), ...context]
+    const visual = wideChart
+      ? comparisonChart(composition, visualBox, ctx)
+      : comparisonTable(composition, visualBox, ctx)
+    if (visual && visual.box.h <= visualBox.h) return [visual, ...panel(area), ...context]
+  }
+
+  // A dense explanation can use as much of the row as the comparison itself.
+  for (const fraction of [0.58, 0.51, 0.46]) {
+    const visualBox = { ...box, w: box.w * fraction }
+    const area = { ...box, x: box.x + visualBox.w + gap, w: box.w - visualBox.w - gap }
+    const text = compositionText(ctx, 'body', slide.body, inset(area), textSize, colors.text)
+    if (text.overflow) continue
+    const visual = comparisonChart(composition, visualBox, ctx)
+      ?? comparisonTable(composition, visualBox, ctx)
+    if (visual.box.h <= visualBox.h
+        && (visual.type === 'chart' || visual.fontSize >= Math.min(14, typography.body.min))) {
+      return [visual, ...panel(area), text]
+    }
   }
 
   // Keep full text and the usual overflow indication for unusually dense input.

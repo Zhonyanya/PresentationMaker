@@ -1,8 +1,9 @@
 import type { TextSlide } from '@/domain/presentation'
 import { contentBox, fittedText, lines } from './chrome'
-import { firstSentence } from './content-utils'
+import { firstSentence, sentencesOf } from './content-utils'
 import type { Box, SceneElement, SceneParagraph, SceneText } from './scene'
 import type { RenderContext } from './types'
+import { estimateTextHeight } from './text-fit'
 
 const monthNames = [
   'январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август',
@@ -79,6 +80,112 @@ function readTree(body: string) {
     return undefined
   }
   return { root: root.trim(), branches }
+}
+
+function paragraphColumns(paragraphs: SceneParagraph[], ctx: RenderContext): SceneElement[] | undefined {
+  if (paragraphs.length < 2) return undefined
+  const { colors, fonts, typography } = ctx.theme
+  const box = contentBox(ctx)
+  const gap = 0.52
+  const width = (box.w - gap) / 2
+  const style = {
+    fontFace: fonts.body, color: colors.text, align: 'left' as const, valign: 'top' as const,
+    lineSpacing: typography.lineSpacing, paragraphSpacing: typography.paragraphSpacing,
+  }
+  const size = { max: typography.body.max, min: Math.min(typography.body.max, Math.max(16, typography.body.min)) }
+  const weights = paragraphs.map((paragraph) =>
+    estimateTextHeight([paragraph], width, size.max, style) + style.paragraphSpacing / 72)
+  const total = weights.reduce((sum, weight) => sum + weight, 0)
+  let best = 1
+  let bestDistance = Infinity
+  let left = 0
+  for (let index = 1; index < paragraphs.length; index += 1) {
+    left += weights[index - 1]
+    const distance = Math.abs(total - 2 * left)
+    if (distance < bestDistance) {
+      best = index
+      bestDistance = distance
+    }
+  }
+
+  const columns = [paragraphs.slice(0, best), paragraphs.slice(best)].map((items, index) => fittedText({
+    field: 'body',
+    box: { ...box, x: box.x + index * (width + gap), w: width },
+    paragraphs: items,
+    size,
+    style,
+  }))
+  if (columns.some(({ overflow }) => overflow)) return undefined
+  const fontSize = Math.min(...columns.map((column) => column.style.fontSize))
+  for (const column of columns) column.style.fontSize = fontSize
+  const height = Math.max(...columns.map((column) => estimateTextHeight(
+    column.paragraphs, width, fontSize, style,
+  )))
+  return [
+    { type: 'rect', fill: colors.divider,
+      box: { x: box.x + width + gap / 2, y: box.y, w: 0.013, h: height } },
+    ...columns,
+  ]
+}
+
+const statisticLabel = /^\p{L}[\p{L}\p{M}\d ()/–-]{1,42}:(?=\s)/u
+const statisticValue = /(?<![\p{L}\p{N}])[+−-]?\d+(?:[ \u00a0\u202f]\d{3})*(?:[,.]\d+)?(?:[–—-]\d+)?(?:[ \u00a0\u202f]*%)?(?![\p{L}\p{N}])/gu
+const yearOrRange = /^(?:19|20)\d{2}(?:[–—-]\d{2,4})?$/
+
+function statisticGroups(paragraphs: SceneParagraph[], ctx: RenderContext): SceneElement[] | undefined {
+  const sentences = paragraphs.flatMap(({ text }) => sentencesOf(text).map((sentence) => ({ text: sentence })))
+  const groups: SceneParagraph[] = []
+  for (const { text } of sentences) {
+    const label = text.match(statisticLabel)?.[0]
+    if (!label) break
+    const numericRanges = Array.from(text.slice(label.length).matchAll(statisticValue))
+      .filter(([value]) => !yearOrRange.test(value))
+      .map(({ 0: value, index }) => ({ start: label.length + index, end: label.length + index + value.length }))
+    if (!numericRanges.length) break
+    groups.push({ text, emphasis: [{ start: 0, end: label.length }, ...numericRanges] })
+  }
+  if (groups.length < 2 || groups.length > 3) return undefined
+
+  const details = sentences.slice(groups.length)
+  const { colors, fonts, typography } = ctx.theme
+  const box = contentBox(ctx)
+  const gap = 0.26
+  const padding = 0.25
+  const width = (box.w - gap * (groups.length - 1)) / groups.length
+  const style = {
+    fontFace: fonts.body, color: colors.text, emphasisColor: colors.primary,
+    align: 'left' as const, valign: 'top' as const,
+    lineSpacing: 1.08, paragraphSpacing: typography.paragraphSpacing,
+  }
+  const size = { max: typography.body.max, min: Math.min(typography.body.max, 16) }
+  const groupSize = { ...size, max: Math.max(size.max, Math.min(24, typography.heading.min)) }
+  const contentWidth = width - 2 * padding
+  const naturalHeight = Math.max(...groups.map((group) => (
+    estimateTextHeight([group], contentWidth, groupSize.max, style) / 0.96
+  )))
+  const height = Math.min(box.h * (details.length ? 0.68 : 1), Math.max(1.9, naturalHeight + 2 * padding))
+  const y = box.y + (details.length ? 0 : Math.min(0.45, (box.h - height) / 2))
+  const cards = groups.map((group, index) => {
+    const area = { x: box.x + index * (width + gap), y, w: width, h: height }
+    const content = fittedText({
+      field: 'body', paragraphs: [group], size: groupSize, style,
+      box: { x: area.x + padding, y: area.y + padding, w: contentWidth, h: height - 2 * padding },
+    })
+    return { area, content }
+  })
+  if (cards.some(({ content }) => content.overflow)) return undefined
+  const fontSize = Math.min(...cards.map(({ content }) => content.style.fontSize))
+  const elements = cards.flatMap(({ area, content }): SceneElement[] => [
+    { type: 'rect', box: area, fill: colors.surface },
+    { type: 'rect', box: { ...area, h: 0.055 }, fill: colors.accent },
+    { ...content, style: { ...content.style, fontSize } },
+  ])
+  if (!details.length) return elements
+  const context = fittedText({
+    field: 'body', paragraphs: details, size, style,
+    box: { x: box.x, y: box.y + height + gap, w: box.w, h: box.h - height - gap },
+  })
+  return context.overflow ? undefined : [...elements, context]
 }
 
 export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElement[] | undefined {
@@ -225,11 +332,13 @@ export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElem
         }
         break
       }
+      const statistics = slide.textStyle ? undefined : statisticGroups(paragraphs, ctx)
+      if (statistics) return statistics
       const [first, ...rest] = paragraphs
       const lead = slide.textStyle === 'lead' ? first.text : firstSentence(first.text)
       const remainingFirst = first.text.slice(lead.length).trim()
       const details = remainingFirst ? [{ text: remainingFirst }, ...rest] : rest
-      if (lead.length > 185 || details.length > 4) return undefined
+      if (lead.length > 185 || details.length > 4) return paragraphColumns(paragraphs, ctx)
       if (ctx.sideLead && lead.length <= 110 && details.length
           && details.reduce((sum, item) => sum + item.text.length, 0) <= 320) {
         const highlight = { ...box, w: box.w * 0.40, h: box.h * 0.87 }
@@ -249,5 +358,7 @@ export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElem
       }
     }
   }
-  return texts.some((element) => element.overflow) ? undefined : [...backgrounds, ...texts]
+  if (!texts.some((element) => element.overflow)) return [...backgrounds, ...texts]
+  const canFlow = slide.textStyle === 'lead' || slide.textStyle === undefined
+  return canFlow ? paragraphColumns(paragraphs, ctx) : undefined
 }

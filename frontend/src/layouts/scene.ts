@@ -19,6 +19,19 @@ export interface Box {
 export interface SceneParagraph {
   text: string
   bullet?: boolean
+  emphasis?: { start: number; end: number }[]
+}
+
+export function paragraphRuns({ text, emphasis = [] }: SceneParagraph) {
+  const runs: { text: string; emphasized?: boolean }[] = []
+  let start = 0
+  for (const range of emphasis) {
+    if (start < range.start) runs.push({ text: text.slice(start, range.start) })
+    runs.push({ text: text.slice(range.start, range.end), emphasized: true })
+    start = range.end
+  }
+  if (start < text.length) runs.push({ text: text.slice(start) })
+  return runs
 }
 
 export interface TextStyle {
@@ -26,6 +39,7 @@ export interface TextStyle {
   /** pt */
   fontSize: number
   color: string
+  emphasisColor?: string
   bold?: boolean
   align: 'left' | 'center' | 'right'
   valign: 'top' | 'middle' | 'bottom'
@@ -71,7 +85,15 @@ export interface SceneTable {
   fontSize: number
   fontFace: string
   padding: number
+  columnWidths: number[]
   rowHeights: number[]
+  comparisonStyle?: {
+    headerFill: string
+    headerText: string
+    rowFill: string
+    alternateFill: string
+    bodyText: string
+  }
 }
 
 export interface TableMerge {
@@ -84,6 +106,8 @@ export interface TableMerge {
 export interface SceneChart {
   type: 'chart'
   box: Box
+  /** Plot bounds as fractions of the chart box. */
+  plot: Box
   categories: string[]
   series: { label: string; values: number[]; color: string }[]
   unit?: '%'

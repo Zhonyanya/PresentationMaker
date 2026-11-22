@@ -26,5 +26,9 @@ export function usePresentationScenes(slides: Slide[]): SlideScene[] {
 }
 
 export function sceneHasOverflow(scene: SlideScene): boolean {
-  return scene.elements.some((e) => e.type === 'text' && e.overflow)
+  return scene.elements.some((element) => {
+    if (element.type === 'text') return element.overflow
+    return element.type === 'table'
+      && element.box.y + element.box.h > presentationTheme.spacing.contentBottom + 0.01
+  })
 }

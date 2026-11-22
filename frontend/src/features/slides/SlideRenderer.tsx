@@ -1,9 +1,10 @@
 import { memo, type CSSProperties } from 'react'
 import type { SceneChart, SceneElement, SceneText, SlideScene } from '@/layouts/scene'
+import { paragraphRuns } from '@/layouts/scene'
 import { LINE_HEIGHT_FACTOR } from '@/layouts/text-fit'
 import { presentationTheme } from '@/theme/presentation-theme'
 import { cn } from '@/lib/utils'
-import { visibleTableCells } from '@/layouts/source-material'
+import { tableCellStyle, visibleTableCells } from '@/layouts/source-material'
 import { formatComparisonValue } from '@/layouts/compositions'
 
 /** 1 дюйм слайда = 96 px превью. Слайд 13.333″ × 7.5″ → 1280 × 720 px. */
@@ -35,8 +36,7 @@ function boxStyle(element: SceneElement): CSSProperties {
 }
 
 function ChartElement({ chart }: { chart: SceneChart }) {
-  const format = new Intl.NumberFormat('ru', { maximumFractionDigits: chart.decimals })
-  const label = (value: number) => formatComparisonValue(value, chart.unit)
+  const label = (value: number) => formatComparisonValue(value, chart.unit, chart.valueDecimals)
   const tickCount = Math.round(chart.maximum / chart.interval)
   const summary = chart.categories.map((name, index) => (
     `${name}: ${chart.series.map((series) => `${series.label} — ${label(series.values[index])}`).join(', ')}`
@@ -54,7 +54,10 @@ function ChartElement({ chart }: { chart: SceneChart }) {
           </span>
         ))}
       </div>
-      <div style={{ position: 'absolute', left: '11%', right: '3%', top: '15%', bottom: '18%' }}>
+      <div style={{
+        position: 'absolute', left: `${chart.plot.x * 100}%`, top: `${chart.plot.y * 100}%`,
+        width: `${chart.plot.w * 100}%`, height: `${chart.plot.h * 100}%`,
+      }}>
         {Array.from({ length: tickCount + 1 }, (_, index) => (
           <div key={index} style={{
             position: 'absolute', bottom: `${100 * index / tickCount}%`, width: '100%',
@@ -62,7 +65,7 @@ function ChartElement({ chart }: { chart: SceneChart }) {
           }}>
             <span style={{
               position: 'absolute', right: '100%', marginRight: 8, transform: 'translateY(-50%)',
-            }}>{format.format(index * chart.interval)}{chart.unit}</span>
+            }}>{formatComparisonValue(index * chart.interval, chart.unit, chart.decimals)}</span>
           </div>
         ))}
         <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
@@ -156,7 +159,9 @@ function TextElement({
               •
             </span>
           )}
-          {paragraph.text}
+          {paragraphRuns(paragraph).map((run, runIndex) => run.emphasized
+            ? <strong key={runIndex} style={{ color: style.emphasisColor }}>{run.text}</strong>
+            : run.text)}
         </p>
       ))}
     </div>
@@ -207,22 +212,32 @@ export const SlideRenderer = memo(function SlideRenderer({
                 fontFamily: `'${element.fontFace}', ${presentationTheme.fonts.cssFallback}`,
                 lineHeight: LINE_HEIGHT_FACTOR,
               }}>
-                <colgroup>{element.rows[0].map((_, column) => (
-                  <col key={column} style={{ width: `${100 / element.rows[0].length}%` }} />
+                <colgroup>{element.columnWidths.map((width, column) => (
+                  <col key={column} style={{ width: px(width) }} />
                 ))}</colgroup>
                 <tbody>
                   {visibleTableCells(element.rows, element.merges).map((row, rowIndex) => (
                     <tr key={rowIndex} style={{ height: px(element.rowHeights[rowIndex]) }}>
-                      {row.map((cell) => (
-                        <td key={cell.column} rowSpan={cell.rowspan} colSpan={cell.colspan} style={{
-                          border: '1px solid #cbd5e1',
-                          overflowWrap: 'anywhere',
-                          padding: `${element.padding}pt`,
-                          whiteSpace: 'pre-wrap',
-                        }}>
-                          {cell.text}
-                        </td>
-                      ))}
+                      {row.map((cell) => {
+                        const style = tableCellStyle(element, rowIndex, cell.column)
+                        const isHeading = Boolean(element.comparisonStyle && rowIndex === 0)
+                        const Cell = isHeading ? 'th' : 'td'
+                        return (
+                          <Cell scope={isHeading ? 'col' : undefined} key={cell.column}
+                            rowSpan={cell.rowspan} colSpan={cell.colspan} style={{
+                              border: '1px solid #cbd5e1',
+                              overflowWrap: 'anywhere',
+                              padding: `${element.padding}pt`,
+                              whiteSpace: 'pre-wrap',
+                              ...(style && {
+                                background: style.fill, color: style.color,
+                                fontWeight: style.bold ? 700 : 400, textAlign: style.align,
+                              }),
+                            }}>
+                            {cell.text}
+                          </Cell>
+                        )
+                      })}
                     </tr>
                   ))}
                 </tbody>

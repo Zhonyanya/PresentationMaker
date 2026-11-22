@@ -21,7 +21,7 @@ from .deck_plan import (
 )
 from .grounding import attach_source_quotes, restore_percentage_scopes, select_source_passages
 from .prompts import build_generation_prompt, build_revision_prompt, get_prompt_version
-from .source_document import build_source_payload, review_sections, text_blocks
+from .source_document import build_source_payload, review_sections, source_glossary, text_blocks
 from .transport import request_document
 
 PRESERVES_SLIDE_IDS = True
@@ -402,19 +402,23 @@ def _generate(
         payload["title"] = title
     report = source or text_blocks(text)
     facts = build_source_payload(report)
-    if version == 'v4':
-        sections = review_sections(report)
-        if sections:
-            payload['review_sections'] = sections
+    review = review_sections(report) if version == 'v4' else {}
+    if review:
+        payload['review_sections'] = review
     planned = source is not None and version == 'v4'
     system = build_generation_prompt(planned=planned)
     if facts['source_facts']:
         payload.update(facts)
         system += SOURCE_FACTS_INSTRUCTION
     if planned:
-        annotated_text, anchors, references, verbatim = plan_evidence(source, facts['source_facts'])
+        annotated_text, anchors, references, verbatim = plan_evidence(
+            source, facts['source_facts'], limitations=set(review.get('limitations', ())),
+        )
         payload['text'] = annotated_text
         payload['source_anchors'] = anchors
+        glossary = source_glossary(source)
+        if glossary:
+            payload['source_glossary'] = glossary
         if verbatim:
             payload['verbatim_blocks'] = list(verbatim)
         plan_schema(schema, target_count, verbatim)

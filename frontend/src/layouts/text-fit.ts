@@ -78,11 +78,11 @@ export function estimateTextHeight(
   fontSize: number,
   options: Pick<FitOptions, 'bold' | 'lineSpacing' | 'paragraphSpacing' | 'bulletIndent'>,
 ): number {
-  const charWidth = (fontSize / POINTS_PER_INCH) * charWidthEm(options.bold)
   const lineHeight = (fontSize / POINTS_PER_INCH) * LINE_HEIGHT_FACTOR * options.lineSpacing
   const spacing = options.paragraphSpacing / POINTS_PER_INCH
   let height = 0
   paragraphs.forEach((paragraph, index) => {
+    const charWidth = (fontSize / POINTS_PER_INCH) * charWidthEm(options.bold || Boolean(paragraph.emphasis?.length))
     const indent = paragraph.bullet ? (options.bulletIndent ?? 0) / POINTS_PER_INCH : 0
     const charsPerLine = Math.floor((width - indent) / charWidth)
     height += countLines(paragraph.text, charsPerLine) * lineHeight

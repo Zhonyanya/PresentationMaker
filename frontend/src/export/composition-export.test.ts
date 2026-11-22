@@ -12,6 +12,30 @@ import type { SceneText } from '@/layouts/scene'
 import { presentationTheme } from '@/theme/presentation-theme'
 import { buildPptx } from './pptx-export'
 
+it('сохраняет длинные абзацы в порядке чтения и использует две колонки, когда они помещаются', async () => {
+  const paragraphs = [
+    'Рабочая группа сверила все исходные журналы и сопоставила записи с выгрузкой за оба периода, после чего отдельно проверила спорные случаи с изменившимися идентификаторами и отметила, какие строки пришлось исключить из сопоставления.',
+    'Участников без согласованной даты учитывали отдельно. Пропуски в журналах не заменяли средними значениями.',
+    'Смена формы регистрации повлияла на сравнимость результатов. Дополнительную проверку запланировали на июнь.',
+    'Данные о причинах исключения доступны в исходной таблице. Для них сохранены прежние коды.',
+  ]
+  const deck = presentationSchema.parse({
+    title: 'Пилот', slides: [{
+      id: 'long-evidence', layout: 'text', title: 'Как сверяли данные', body: paragraphs.join('\n\n'),
+    }],
+  })
+  const [scene] = buildPresentationScenes(deck.slides, presentationTheme)
+  const columns = scene.elements.filter((item): item is SceneText => item.type === 'text' && item.field === 'body')
+  expect(columns).toHaveLength(2)
+  expect(columns.flatMap(({ paragraphs }) => paragraphs.map(({ text }) => text))).toEqual(paragraphs)
+  expect(columns.every(({ overflow, style }) => !overflow && style.fontSize >= 16)).toBe(true)
+  expect(columns[0].box.x + columns[0].box.w).toBeLessThan(columns[1].box.x)
+  const pptx = await buildPptx(deck)
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const xml = await zip.file('ppt/slides/slide1.xml')!.async('string')
+  expect(paragraphs.every((paragraph) => xml.includes(paragraph))).toBe(true)
+})
+
 it('отображает и экспортирует сравнение из одного набора данных', async () => {
   const document = presentationSchema.parse({
     title: 'Пилот',
@@ -39,6 +63,22 @@ it('отображает и экспортирует сравнение из о�
   expect(chartXml).toContain('<c:legend>')
   expect(chartXml).not.toContain('<c:max ')
   expect(Object.keys(zip.files).some((name) => /^ppt\/embeddings\/.*\.xlsx$/.test(name))).toBe(true)
+})
+
+it('использует единую точность для целых и дробных процентов в PowerPoint', async () => {
+  const deck = presentationSchema.parse({
+    title: 'Обучение', slides: [{
+      id: 'precision', layout: 'text', title: 'Дистанционные технологии', body: '',
+      composition: { kind: 'comparison', unit: '%', categories: ['Магистратура'],
+        series: [{ label: '2023', values: [48.3] }, { label: '2024', values: [50] }] },
+    }],
+  })
+  const pptx = await buildPptx(deck)
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const [file] = zip.file(/^ppt\/charts\/chart\d+\.xml$/)
+  const chart = await file.async('string')
+  expect(chart).toContain('formatCode="0.0&quot;%&quot;"')
+  expect(chart).toContain('<c:v>50</c:v>')
 })
 
 it('даёт длинному пояснению всю ширину под диаграммой и сохраняет оговорки при экспорте', async () => {
@@ -125,6 +165,38 @@ it('показывает равноправные периоды рядом и �
   const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
   const xml = await zip.file('ppt/slides/slide1.xml')?.async('string')
   for (const phrase of [march, april, limitation]) expect(xml).toContain(phrase)
+})
+
+it('выделяет числа в явно подписанных группах и сохраняет утверждения целиком', async () => {
+  const methods = 'Доля поездок: автомобиль 58% (76% миль), пешком 29%.'
+  const purposes = 'Основные цели: покупки 17%, поездки на работу 13%, прогулка 9%.'
+  const limit = 'При сравнении учитывали изменение способа регистрации.'
+  const deck = presentationSchema.parse({
+    title: 'Поездки', slides: [{
+      id: 'travel', layout: 'text', title: 'Как и зачем ездили', body: [methods, purposes, limit].join(' '),
+    }],
+  })
+  const [scene] = buildPresentationScenes(deck.slides, presentationTheme)
+  const panels = scene.elements.filter((element): element is SceneText =>
+    element.type === 'text' && element.field === 'body',
+  )
+  expect(panels.map(({ paragraphs }) => paragraphs.map(({ text }) => text))).toEqual([
+    [methods], [purposes], [limit],
+  ])
+  expect(panels[0].box.y).toBe(panels[1].box.y)
+  expect(panels[1].box.x).toBeGreaterThan(panels[0].box.x + panels[0].box.w)
+  expect(panels[2].box.y).toBeGreaterThan(panels[1].box.y + panels[1].box.h)
+  const preview = renderToStaticMarkup(createElement(SlideRenderer, { scene, scale: 1 }))
+  expect(preview).toMatch(/<strong[^>]*>58%<\/strong>/)
+  expect(preview).toMatch(/<strong[^>]*>76%<\/strong>/)
+  const pptx = await buildPptx(deck)
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const xml = await zip.file('ppt/slides/slide1.xml')!.async('string')
+  const paragraphs = [...xml.matchAll(/<a:p(?:\s[^>]*)?>([\s\S]*?)<\/a:p>/g)]
+    .map(([paragraph]) => [...paragraph.matchAll(/<a:t(?:\s[^>]*)?>([^<]*)<\/a:t>/g)]
+      .map(([, text]) => text).join(''))
+  expect(paragraphs).toEqual(expect.arrayContaining([methods, purposes, limit]))
+  expect(xml).toMatch(/<a:r><a:rPr[^>]* b="1"[^>]*>[\s\S]*?<\/a:rPr><a:t>58%<\/a:t><\/a:r>/)
 })
 
 it('раскладывает перечисленные меры на отдельные карточки и сохраняет вложенную оговорку', async () => {
@@ -222,6 +294,89 @@ it('показывает плотные сравнения таблицей и �
   const slideXml = await zip.file('ppt/slides/slide1.xml')?.async('string')
   expect(slideXml).toContain('<a:tbl>')
   expect(slideXml).toContain('Контекст сравнения.')
+})
+
+it('оставляет место под длинные названия групп в компактной диаграмме', async () => {
+  const categories = [
+    'Северные горные площадки', 'Курганские сельские школы', 'Южные учебные многоцентры',
+    'Новые школьные мастерские', 'Дневные районные классы', 'Летние языковые площадки',
+  ]
+  const body = 'В трёх группах результат снизился, несмотря на расширение охвата в остальных. '
+    + 'Данные не корректировали на число смен и длительность занятий, поэтому сравнение описывает '
+    + 'только итоговые значения. На школьных площадках применяли одинаковый порядок учёта. '
+    + 'В учебных центрах отдельные наблюдения были недоступны, поэтому разные форматы работы имеют '
+    + 'несопоставимые условия.'
+  const deck = presentationSchema.parse({
+    title: 'Охват',
+    slides: [{
+      id: 'wrap', layout: 'text', title: 'Названия групп', body,
+      composition: { kind: 'comparison', categories, series: [
+        { label: '2024', values: [19, 23, 56, 17, 21, 19] },
+        { label: '2025', values: [21, 24, 54, 16, 20, 23] },
+      ] },
+    }],
+  })
+  const [scene] = buildPresentationScenes(deck.slides, presentationTheme)
+  const chart = scene.elements.find((element) => element.type === 'chart')
+  expect(chart?.categories).toEqual(categories)
+  const plot = chart!.plot
+  expect(plot.y * chart!.box.h).toBeGreaterThanOrEqual(0.62)
+  expect(plot.y + plot.h).toBeLessThan(0.82)
+  const context = scene.elements.find((element) => element.type === 'text' && element.field === 'body')
+  expect(context!.box.y).toBeGreaterThan(chart!.box.y + chart!.box.h)
+  const preview = renderToStaticMarkup(createElement(SlideRenderer, { scene, scale: 1 }))
+  expect(preview).toContain(`height:${plot.h * 100}%`)
+  const pptx = await buildPptx(deck)
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const [chartFile] = zip.file(/^ppt\/charts\/chart\d+\.xml$/)
+  const chartXml = await chartFile.async('string')
+  expect(categories.every((name) => chartXml.includes(name))).toBe(true)
+  expect(chartXml).not.toContain('<c:max ')
+  const exportedPlotTop = chartXml.match(/<c:y val="([^"]+)"\s*\/>/)?.[1]
+  expect(Number(exportedPlotTop)).toBeCloseTo(plot.y)
+  const exportedPlotHeight = chartXml.match(/<c:h val="([^"]+)"\s*\/>/)?.[1]
+  expect(Number(exportedPlotHeight)).toBeCloseTo(plot.h)
+})
+
+it('отдаёт длинному пояснению больше ширины рядом с таблицей сравнения', async () => {
+  const categories = [
+    'Средние горные школы', 'Региональные училища', 'Лесные учебные центры',
+    'Кружки робототехники', 'Дистанционные группы', 'Сельские языковые клубы',
+  ]
+  const body = [
+    'В двух группах результат снизился, несмотря на расширение охвата в остальных. ' +
+      'Данные не корректировали на число смен и длительность занятий, поэтому сравнение описывает только итоговые значения.',
+    'На школьных площадках применяли одинаковый порядок учёта. ' +
+      'В учебных центрах отдельные наблюдения были недоступны, поэтому разные форматы работы имеют несопоставимые условия.',
+    'Данные относятся к двум календарным периодам. ' +
+      'Изменения в составе групп учитывали отдельно, а выводы о причинах изменений по этому сравнительному ряду не делали.',
+  ].join('\n')
+  const deck = presentationSchema.parse({
+    title: 'Охват', slides: [{
+      id: 'explanation', layout: 'text', title: 'Сопоставимость результатов', body,
+      composition: { kind: 'comparison', categories, series: [
+        { label: '2024', values: [38, 47, 25, 33, 56, 31] },
+        { label: '2025', values: [44, 45, 29, 42, 49, 37] },
+      ] },
+    }],
+  })
+  const [scene] = buildPresentationScenes(deck.slides, presentationTheme)
+  const table = scene.elements.find((element) => element.type === 'table')
+  const explanation = scene.elements.find((element): element is SceneText => (
+    element.type === 'text' && element.field === 'body'
+  ))
+  expect(table?.rows.slice(1).map(([name]) => name)).toEqual(categories)
+  expect(table!.box.y + table!.box.h).toBeLessThanOrEqual(presentationTheme.spacing.contentBottom)
+  expect(explanation!.box.x).toBeGreaterThan(table!.box.x + table!.box.w)
+  expect(explanation).toMatchObject({ overflow: false })
+  expect(explanation!.style.fontSize).toBeGreaterThanOrEqual(16)
+  expect(explanation?.paragraphs.map(({ text }) => text)).toEqual(body.split('\n'))
+  const pptx = await buildPptx(deck)
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const slideXml = await zip.file('ppt/slides/slide1.xml')!.async('string')
+  expect(slideXml).toContain('<a:tbl>')
+  expect(slideXml).toContain('<a:t>56</a:t>')
+  expect(body.split('\n').every((paragraph) => slideXml.includes(paragraph))).toBe(true)
 })
 
 it('рендерит тезис, равноправные блоки и порядок действий из редактируемого body', async () => {

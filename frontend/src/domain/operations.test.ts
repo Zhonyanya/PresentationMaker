@@ -20,6 +20,37 @@ import { presentationSchema, slideSchema, SLIDE_LAYOUTS, type Slide } from './pr
 const long = (n: number) => 'я'.repeat(n)
 const list = (n: number) => Array.from({ length: n }, (_, i) => `Пункт ${i + 1}`)
 
+it('разделяет таблицу сравнения по группам и сохраняет периоды и оговорку', () => {
+  const rows = [['Группа', '2024', '2025'], ['Север', '10', '15'], ['Юг', '6', '8'], ['Центр', '11', '13']]
+  const original: Slide = {
+    id: 'table',
+    layout: 'text',
+    title: 'Заявки',
+    body: 'Юг. 2024 — 6; 2025 — 8\nОтдельный опрос не проводили.',
+    sourceMaterial: { kind: 'table', page: 7, rows },
+  }
+  const { presentation, newId } = splitSlide({ title: 'Пилот', slides: [original] }, original.id)
+  expect(newId).not.toBeNull()
+  expect(canSplitSlide({ ...original, body: '' })).toBe(true)
+  expect(presentation.slides).toMatchObject([
+    { id: 'table', body: 'Отдельный опрос не проводили.',
+      sourceMaterial: { page: 7, rows: [rows[0], rows[1], rows[2]] } },
+    { id: newId, title: 'Заявки (продолжение)', body: '',
+      sourceMaterial: { page: 7, rows: [rows[0], rows[3]] } },
+  ])
+})
+
+it('при разделении пояснения исходный материал остаётся на первом слайде', () => {
+  const original: Slide = {
+    id: 'table', layout: 'text', title: 'Доклад', body: 'Источник и методика.\nОграничение.',
+    sourceMaterial: { kind: 'table', page: 3, rows: [['Уровень', 'Точка'], ['I', '13']] },
+  }
+  const { presentation } = splitSlide({ title: 'Пилот', slides: [original] }, original.id)
+  expect(presentation.slides[0]).toHaveProperty('sourceMaterial', original.sourceMaterial)
+  expect(presentation.slides[1]).toHaveProperty('body', 'Ограничение.')
+  expect(presentation.slides[1]).not.toHaveProperty('sourceMaterial')
+})
+
 describe('пределы схемы в редакторе', () => {
   it('fitSlide приводит перегруженный слайд любого макета к схеме', () => {
     const oversized: Slide[] = [

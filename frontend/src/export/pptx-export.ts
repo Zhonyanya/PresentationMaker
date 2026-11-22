@@ -2,7 +2,8 @@ import type PptxGenJS from 'pptxgenjs'
 import type { Presentation } from '@/domain/presentation'
 import { buildPresentationScenes } from '@/layouts/registry'
 import type { SceneElement, SceneText } from '@/layouts/scene'
-import { visibleTableCells } from '@/layouts/source-material'
+import { paragraphRuns } from '@/layouts/scene'
+import { tableCellStyle, visibleTableCells } from '@/layouts/source-material'
 import { presentationTheme, type PresentationTheme } from '@/theme/presentation-theme'
 import { sanitizeText } from '@/lib/text'
 
@@ -29,14 +30,15 @@ type PptxSlide = ReturnType<PptxGenJS['addSlide']>
 function addText(slide: PptxSlide, element: SceneText) {
   if (element.paragraphs.length === 0) return
   const { style, box } = element
-  const runs = element.paragraphs.map((paragraph, index) => ({
-    text: sanitizeText(paragraph.text),
+  const runs = element.paragraphs.flatMap((paragraph, index) => paragraphRuns(paragraph).map((run, runIndex, parts) => ({
+    text: sanitizeText(run.text),
     options: {
-      breakLine: index < element.paragraphs.length - 1,
-      bullet: paragraph.bullet ? { indent: style.bulletIndent ?? 18 } : false,
+      breakLine: runIndex === parts.length - 1 && index < element.paragraphs.length - 1,
+      bullet: paragraph.bullet && runIndex === 0 ? { indent: style.bulletIndent ?? 18 } : false,
       paraSpaceAfter: index < element.paragraphs.length - 1 ? style.paragraphSpacing : 0,
+      ...(run.emphasized && { bold: true, color: hex(style.emphasisColor ?? style.color) }),
     },
-  }))
+  })))
   slide.addText(runs, {
     x: box.x,
     y: box.y,
@@ -74,13 +76,23 @@ function addElement(pptx: PptxGenJS, slide: PptxSlide, element: SceneElement) {
       })
       break
     case 'table': {
-      const { w, ...position } = element.box
-      slide.addTable(visibleTableCells(element.rows, element.merges).map((row) => row.map((cell) => ({
-        text: sanitizeText(cell.text),
-        options: { rowspan: cell.rowspan, colspan: cell.colspan },
-      }))), {
-        ...position,
-        colW: element.rows[0].map(() => w / element.rows[0].length),
+      const { x, y, w, h } = element.box
+      const rows = visibleTableCells(element.rows, element.merges).map((row, index) => row.map((cell) => {
+        const style = tableCellStyle(element, index, cell.column)
+        return {
+          text: sanitizeText(cell.text),
+          options: {
+            rowspan: cell.rowspan,
+            colspan: cell.colspan,
+            ...(style && {
+              fill: { color: hex(style.fill) }, color: hex(style.color), bold: style.bold, align: style.align,
+            }),
+          },
+        }
+      }))
+      slide.addTable(rows, {
+        x, y, w, h,
+        colW: element.columnWidths,
         autoPage: false,
         fontSize: element.fontSize,
         fontFace: element.fontFace,
@@ -92,7 +104,7 @@ function addElement(pptx: PptxGenJS, slide: PptxSlide, element: SceneElement) {
       break
     }
     case 'chart': {
-      const numberFormat = (decimals: number) => '0' + (decimals ? `.${'#'.repeat(decimals)}` : '')
+      const numberFormat = (decimals: number) => '0' + (decimals ? `.${'0'.repeat(decimals)}` : '')
         + (element.unit ? `"${element.unit}"` : '')
       slide.addChart(pptx.ChartType.bar, element.series.map((series) => ({
         name: sanitizeText(series.label),
@@ -100,7 +112,7 @@ function addElement(pptx: PptxGenJS, slide: PptxSlide, element: SceneElement) {
         values: series.values,
       })), {
         ...element.box,
-        layout: { x: 0.11, y: 0.15, w: 0.86, h: 0.67 },
+        layout: element.plot,
         barDir: 'col',
         barGrouping: 'clustered',
         chartColors: element.series.map((series) => hex(series.color)),

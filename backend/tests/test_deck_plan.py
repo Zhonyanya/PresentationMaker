@@ -46,6 +46,7 @@ def test_generation_binds_intent_to_source_without_graph_facts(monkeypatch):
         assert "2–4 конкретные детали в видимом тексте" in request["system"]
         assert "Не своди разные случаи к общему тезису" in request["system"]
         assert "Не прячь существенные условия в notes" in request["system"]
+        assert "Не оставляй такие условия только для финального слайда" in request["system"]
 
     result = planned_generation(monkeypatch, {
         "title": "Архив",
@@ -67,6 +68,40 @@ def test_generation_binds_intent_to_source_without_graph_facts(monkeypatch):
     assert (evidence.id, evidence.block_id, evidence.page) == ("block-1", "p1-text", 1)
 
 
+def test_planned_generation_carries_opening_figures_and_literal_definitions(monkeypatch):
+    source = {"blocks": [
+        {"kind": "text", "id": "intro", "page": 1, "text": "Introduction"},
+        {"kind": "text", "id": "programme", "page": 1,
+         "text": "School-Led Tutoring (SLT) was subsidised at 75% in its first year."},
+        {"kind": "text", "id": "eligibility", "page": 1,
+         "text": "Eligibility included pupils receiving pupil premium (PP)."},
+        {"kind": "text", "id": "findings", "page": 2, "text": "Results"},
+        {"kind": "text", "id": "results", "page": 2,
+         "text": "The effect was modest across the monitored schools."},
+        {"kind": "text", "id": "recommendations", "page": 3, "text": "Recommendations"},
+        {"kind": "text", "id": "next", "page": 3,
+         "text": "Record tutoring routes and subjects separately."},
+    ]}
+
+    def inspect(request):
+        review = request["payload"]["review_sections"]
+        assert review["context"][0] == source["blocks"][1]["text"]
+        assert review["proposed"] == [source["blocks"][-1]["text"]]
+        assert request["payload"]["source_glossary"] == [
+            {"abbreviation": "SLT", "definition": "School-Led Tutoring",
+             "source": {"block_id": "programme", "page": 1}},
+            {"abbreviation": "PP", "definition": "pupil premium",
+             "source": {"block_id": "eligibility", "page": 1}},
+        ]
+        assert "source_glossary" in request["system"]
+
+    planned_generation(monkeypatch, {
+        "title": "Оценка программы",
+        "plan": [intent("Результаты", "block-5")],
+        "slides": [{"layout": "text", "title": "Результаты", "body": "Эффект был небольшим."}],
+    }, source=source, inspect_request=inspect)
+
+
 @pytest.mark.parametrize("evidence_ids", [("invented",), ()])
 def test_generation_rejects_unresolved_evidence_on_content_slide(monkeypatch, evidence_ids):
     with pytest.raises(ValueError, match="evidence"):
@@ -81,17 +116,20 @@ def test_generation_renders_exact_numeric_source_paragraph_before_filling_closin
     paragraph = ("Журнал был недоступен 9–11 декабря. После восстановления в сводку "
                  "вернули 11 записей о завершённых занятиях.")
     source = {"blocks": [{"kind": "text", "id": "journal", "page": 2, "text": paragraph},
+                         {"kind": "text", "id": "reference",
+                          "text": "Distance travelled [NTS0101] Average time [NTS0101]"},
                          {"kind": "text", "id": "limits", "text": "Данные требуют оговорки."}]}
 
     def inspect(request):
         assert request["payload"]["verbatim_blocks"] == ["block-1"]
         assert "[block-1]\n" + paragraph in request["payload"]["text"]
+        assert "[block-2]\nDistance travelled [NTS0101]" in request["payload"]["text"]
         proposal = request["schema"]["properties"]["plan"]["items"]["properties"]
         assert proposal["verbatim_block_ids"]["items"]["enum"] == ["block-1"]
 
     result = planned_generation(monkeypatch, {
         "title": "Занятия",
-        "plan": [{**intent("Ограничения учёта", "block-1", "block-2"),
+        "plan": [{**intent("Ограничения учёта", "block-1", "block-3"),
                   "verbatim_block_ids": ["block-1"]}],
         "slides": [{"id": "journal-slide", "layout": "text", "title": "Учёт",
                     "body": "Данные требуют оговорки."}],
@@ -103,10 +141,32 @@ def test_generation_renders_exact_numeric_source_paragraph_before_filling_closin
     assert result.plan.slides[1].intents[0].evidence[0].block_id == "journal"
 
 
+def test_planned_v4_can_preserve_a_short_nonnumeric_limitation_verbatim(monkeypatch):
+    source = {"blocks": [
+        {"kind": "text", "id": "summary", "text": "Отзывы участников собрали на общем обсуждении."},
+        {"kind": "text", "id": "limits", "text": "Ограничения"},
+        {"kind": "text", "id": "survey-limit", "text": "Опрос не проводили."},
+        {"kind": "text", "id": "next", "text": "Следующий этап"},
+        {"kind": "text", "id": "decision", "text": "Решение обсудят на общем заседании."},
+    ]}
+
+    def inspect(request):
+        assert request["payload"]["review_sections"]["limitations"] == ["Опрос не проводили."]
+        assert request["payload"]["verbatim_blocks"] == ["block-3"]
+
+    result = planned_generation(monkeypatch, {
+        "title": "Отзывы",
+        "plan": [{**intent("Границы наблюдений", "block-3"), "verbatim_block_ids": ["block-3"]}],
+        "slides": [{"layout": "text", "title": "Границы наблюдений",
+                    "body": "Был проведён опрос всех участников."}],
+    }, source=source, inspect_request=inspect)
+    assert result.document["slides"][1]["body"] == "Опрос не проводили."
+    assert result.plan.slides[1].intents[0].evidence[0].block_id == "survey-limit"
+
+
 @pytest.mark.parametrize(("ids", "layout"), [
     (["block-2"], "text"),
     (["block-3"], "text"),
-    (["block-1", "block-1"], "text"),
     (["block-1"], "title"),
 ])
 def test_generation_validates_verbatim_references(monkeypatch, ids, layout):
@@ -120,6 +180,20 @@ def test_generation_validates_verbatim_references(monkeypatch, ids, layout):
             "plan": [{**intent("Учёт", "block-1"), "verbatim_block_ids": ids}],
             "slides": [{"layout": layout, "title": "Учёт", "body": ""}],
         }, source=source)
+
+
+def test_generation_prints_a_repeated_valid_verbatim_reference_once(monkeypatch):
+    paragraph = "В отчёт вернули 11 старых записей о занятиях."
+    result = planned_generation(monkeypatch, {
+        "title": "Занятия",
+        "plan": [{**intent("Учёт"), "verbatim_block_ids": ["block-1", "block-1"]}],
+        "slides": [{"layout": "text", "title": "Учёт", "body": ""}],
+    }, source={"blocks": [{"kind": "text", "id": "journal", "text": paragraph}]})
+
+    assert result.document["slides"][1]["body"] == paragraph
+    (proposal,) = result.plan.slides[1].intents
+    assert proposal.verbatim_block_ids == ("block-1",)
+    assert [address.block_id for address in proposal.evidence] == ["journal"]
 
 
 def test_generation_can_print_a_verbatim_paragraph_in_the_closing(monkeypatch):

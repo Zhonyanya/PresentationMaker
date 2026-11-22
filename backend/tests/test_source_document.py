@@ -1,14 +1,71 @@
 import pytest
 
 from app.presentations.pdf_blocks import pdf_blocks
-from app.presentations.pdf_source import SourcePage, SourceTable
+from app.presentations.pdf_source import SourcePage, SourceParagraph, SourceTable
 from presentation_ml.source_document import (
     build_source_payload,
     prepare_evidence,
     read_source_json,
+    review_sections,
+    source_glossary,
     text_blocks,
 )
 from presentation_ml.source_reply import verified_table_claim
+
+
+@pytest.mark.parametrize('heading', ['Recommendations', 'Рекомендации'])
+def test_review_sections_keeps_recommendations_across_pdf_folios(heading):
+    first = 'Collect participation data separately for each route and subject.'
+    second = 'Evaluate longer-term outcomes in a separate follow-up study.'
+    pages = (
+        SourcePage(15, '', (), (), paragraphs=(
+            SourceParagraph(30, 0, heading),
+            SourceParagraph(60, 0, first),
+            SourceParagraph(720, 0, '15'),
+        )),
+        SourcePage(16, '', (), (), paragraphs=(
+            SourceParagraph(30, 0, second),
+            SourceParagraph(60, 0, 'References'),
+            SourceParagraph(90, 0, 'The methods paper contains the full selection criteria.'),
+        )),
+    )
+    assert review_sections(pdf_blocks(pages)) == {'proposed': [first, second]}
+
+
+def test_review_sections_keep_unheaded_method_change_and_complete_period_comparisons():
+    travel = 'People made 841 trips on average in 2025.'
+    baseline = 'This was down from 922 trips in 2024.'
+    distance = 'People travelled 5,605 miles in 2025, down from 6,082 miles in 2024.'
+    school = 'Walking to school accounted for 47% of trips in 2025, down from 51% in 2024.'
+    caveat = (
+        'The introduction of a digital travel diary in 2025 was associated with lower recorded '
+        'rates for short trips. Statistics based on interview questions are not affected.'
+    )
+    source = text_blocks('\n\n'.join([
+        caveat, f'{travel} {baseline} {distance}', school,
+        'The introduction of an online diary was announced at the annual meeting.',
+        'The committee met in 2024 and again in 2025 to review its schedule.',
+    ]))
+
+    assert review_sections(source) == {
+        'method_changes': [caveat],
+        'period_comparisons': [f'{travel} {baseline}', school, distance],
+    }
+
+
+def test_source_glossary_keeps_only_unambiguous_literal_expansions():
+    source = text_blocks(
+        'The Board of Governors (BG) commissioned the study. Key Stage 2 (KS2) was included.\n\n'
+        'Project Management (PM) had a workstream. Power Mode (PM) had another workstream.\n\n'
+        'One route was omitted (ZZ). Территориальный общественный центр (ТОЦ) участвовал.'
+    )
+    assert source_glossary(source) == [
+        {'abbreviation': 'BG', 'definition': 'Board of Governors',
+         'source': {'block_id': 'text-1'}},
+        {'abbreviation': 'KS2', 'definition': 'Key Stage 2', 'source': {'block_id': 'text-1'}},
+        {'abbreviation': 'ТОЦ', 'definition': 'Территориальный общественный центр',
+         'source': {'block_id': 'text-3'}},
+    ]
 
 
 def test_pdf_reference_and_comparison_keep_distinct_source_addresses():

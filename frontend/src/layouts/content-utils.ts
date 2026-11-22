@@ -21,3 +21,7 @@ const sentences = new Intl.Segmenter('ru', { granularity: 'sentence' })
 export function firstSentence(text: string): string {
   return sentences.segment(text).containing(0)?.segment.trim() ?? text
 }
+
+export function sentencesOf(text: string): string[] {
+  return Array.from(sentences.segment(text), ({ segment }) => segment.trim()).filter(Boolean)
+}

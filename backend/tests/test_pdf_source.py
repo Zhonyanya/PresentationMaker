@@ -16,6 +16,7 @@ from app.presentations.pdf_source import (
     _framed_figures,
     _page_illustrations,
     read_pdf,
+    reading_regions,
     source_material_slide,
 )
 from app.presentations.schemas import GenerateRequest
@@ -153,6 +154,21 @@ def test_column_breaks_use_the_shared_gutter_instead_of_an_early_line_end():
     gaps = [[(1, edge, 784)] for edge in (644, 663, 685, 727, 729, 731, 735)]
     (gutter,) = _column_breaks(gaps)
     assert 735 < gutter < 784
+
+
+def test_column_caption_overhang_keeps_adjacent_paragraph_together():
+    regions = reading_regions([
+        (10, 280, 510, False, 'The method changed'),
+        (14, 36, 248, False, 'Figure caption'),
+        (22, 280, 510, False, 'and lowered the recorded count.'),
+        (34, 36, 510, False, 'Full-width note'),
+    ], (240,))
+
+    assert list(regions) == [
+        ['Figure caption'],
+        ['The method changed', 'and lowered the recorded count.'],
+        ['Full-width note'],
+    ]
 
 
 def test_pdf_source_preserves_multichar_glyphs_when_splitting_a_line():

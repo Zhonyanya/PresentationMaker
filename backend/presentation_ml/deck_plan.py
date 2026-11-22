@@ -1,7 +1,7 @@
 """Internal slide intents and their addresses in the source report."""
 
 import re
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass
 from itertools import groupby, takewhile
 from typing import Annotated, Literal
@@ -29,6 +29,7 @@ PROCEDURE_HEADING = re.compile(
 CONDITIONS_HEADING = re.compile(r'^(?:Условия|Условие|Conditions?|Requirements?)(?:\s|$)', re.I)
 YEAR = re.compile(r'\b(\d{3,4})(?=\s+год(?:а|у|е|ом)?\b)', re.I)
 SENTENCE_BREAK = re.compile(r'((?<=[.!?])\s+|\r?\n+)')
+STANDALONE_NUMBER = re.compile(r'(?<!\w)\d+(?!\w)')
 
 
 class ProposedIntent(BaseModel):
@@ -134,7 +135,7 @@ def _source_fragments(source: SourceDocument) -> Iterator[tuple[EvidenceAddress,
 
 
 def plan_evidence(
-    source: SourceDocument, facts: list[dict],
+    source: SourceDocument, facts: list[dict], *, limitations: Collection[str] = (),
 ) -> tuple[str, list[dict], dict[str, EvidenceAddress], dict[str, str]]:
     """Label the full source and sample excerpts separately from eligible references."""
     references = {
@@ -169,7 +170,9 @@ def plan_evidence(
     for index, block in enumerate(source.blocks, 1):
         if isinstance(block, TextBlock):
             paragraph = ' '.join(block.text.split())
-            if 30 <= len(paragraph.encode('utf-16-le')) // 2 <= 360 and re.search(r'\d', paragraph):
+            size = len(paragraph.encode('utf-16-le')) // 2
+            if 15 <= size <= 360 and (paragraph in limitations
+                                      or (size >= 30 and STANDALONE_NUMBER.search(paragraph))):
                 verbatim[f'block-{index}'] = paragraph
     return '\n\n'.join(parts).rstrip(), anchors, references, verbatim
 
@@ -200,13 +203,13 @@ def read_intents(
             raise ValueError('Invalid planned slide')
         proposal = ProposedIntent.model_validate(raw)
         ids = proposal.evidence_ids
-        chosen = proposal.verbatim_block_ids
+        chosen = list(dict.fromkeys(proposal.verbatim_block_ids))
         if not ids and not chosen and _requires_evidence(slide):
             raise ValueError('Missing plan evidence for content slide')
         if len(ids) != len(set(ids)) or any(identifier not in references for identifier in ids):
             raise ValueError('Unknown or duplicate plan evidence')
-        if len(chosen) != len(set(chosen)) or not set(chosen) <= verbatim.keys():
-            raise ValueError('Unknown or repeated verbatim block reference')
+        if not set(chosen) <= verbatim.keys():
+            raise ValueError('Unknown verbatim block reference')
         evidence = tuple(references[i] for i in dict.fromkeys(ids + chosen))
         intents.append(SlideIntent(
             proposal.goal, proposal.takeaway, evidence,

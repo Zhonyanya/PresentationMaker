@@ -5,6 +5,7 @@ import type { LayoutDefinition, SlideContent } from '@/layouts/types'
 import { createId } from './ids'
 import { splitInHalf, paragraphsOf } from '@/layouts/content-utils'
 import { compositionAsText } from '@/layouts/compositions'
+import { comparisonContext, isComparisonTable } from '@/layouts/source-material'
 
 /**
  * Чистые операции над презентацией. Не мутируют аргументы —
@@ -190,12 +191,30 @@ export function splitSlide(presentation: Presentation, id: string): { presentati
     first = { ...slide, bullets: a }
     second = { ...slide, id: createId(), title: continuationTitle, bullets: b, notes: '' }
   } else if (slide.layout === 'text') {
-    const paragraphs = paragraphsOf(slide.body)
-    if (paragraphs.length > 1) {
+    const material = slide.sourceMaterial
+    const table = material?.kind === 'table' && isComparisonTable(material) ? material : undefined
+    const paragraphs = table
+      ? comparisonContext(slide.body, table.rows).map(({ text }) => text)
+      : paragraphsOf(slide.body)
+    if (table && table.rows.length >= 3) {
+      const [header, ...rows] = table.rows
+      const [beginning, ending] = splitInHalf(rows)
+      first = {
+        ...slide,
+        body: paragraphs.join('\n'),
+        sourceMaterial: { ...table, rows: [header, ...beginning] },
+      }
+      second = {
+        ...slide, id: createId(), title: continuationTitle, body: '', notes: '',
+        sourceMaterial: { ...table, rows: [header, ...ending] },
+      }
+      delete second.composition
+    } else if (paragraphs.length > 1) {
       const [a, b] = splitInHalf(paragraphs)
       first = { ...slide, body: a.join('\n') }
       second = { ...slide, id: createId(), title: continuationTitle, body: b.join('\n'), notes: '' }
       delete second.composition
+      delete second.sourceMaterial
     }
   } else if (slide.layout === 'two-column' && (slide.left.length > 1 || slide.right.length > 1)) {
     const [l1, l2] = splitInHalf(slide.left)
@@ -216,6 +235,10 @@ export function canSplitSlide(slide: Slide): boolean {
     case 'bullets':
       return slide.bullets.length > 1
     case 'text':
+      if (slide.sourceMaterial?.kind === 'table' && isComparisonTable(slide.sourceMaterial)) {
+        return slide.sourceMaterial.rows.length >= 3
+          || comparisonContext(slide.body, slide.sourceMaterial.rows).length > 1
+      }
       return paragraphsOf(slide.body).length > 1
     case 'two-column':
       return slide.left.length > 1 || slide.right.length > 1

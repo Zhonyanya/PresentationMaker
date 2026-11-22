@@ -2,9 +2,10 @@ import { AlignLeft } from 'lucide-react'
 import type { LayoutDefinition } from '../types'
 import { contentBox, contentChrome, fittedText, lines } from '../chrome'
 import { nonEmpty, paragraphsOf } from '../content-utils'
-import { sourceImageBox, sourceTable } from '../source-material'
+import { comparisonContext, comparisonTableStyle, isComparisonTable, sourceImageBox, sourceTable } from '../source-material'
 import { buildComposition, compositionAsText } from '../compositions'
 import { textComposition } from '../text-compositions'
+import { estimateTextHeight } from '../text-fit'
 
 export const textLayout: LayoutDefinition<'text'> = {
   layout: 'text',
@@ -34,26 +35,35 @@ export const textLayout: LayoutDefinition<'text'> = {
     if (!material && slide.composition) return buildComposition(slide, slide.composition, ctx)
     if (material) {
       const box = contentBox(ctx)
-      const context = material.kind === 'image' ? lines(slide.body) : []
-      const contextHeight = context.length > 1 ? 1 : context.length ? 0.68 : 0
-      const imageBox = { ...box, y: box.y + contextHeight, h: box.h - contextHeight }
+      const isComparison = material.kind === 'table' && isComparisonTable(material)
+      const context = isComparison ? comparisonContext(slide.body, material.rows) : lines(slide.body)
+      const textSize = { max: 17, min: 13 }
+      const textSpacing = { lineSpacing: 1, paragraphSpacing: 0 }
+      let contextHeight = 0
+      if (context.length) {
+        contextHeight = material.kind === 'image' ? (context.length > 1 ? 1 : 0.68)
+          : Math.min(box.h * 0.4, estimateTextHeight(context, box.w, textSize.max, textSpacing) / 0.96 + 0.16)
+      }
+      const visualBox = { ...box, y: box.y + contextHeight, h: box.h - contextHeight }
       return {
         background: colors.background,
         elements: [
           ...contentChrome(slide.title || (material.page ? `Страница ${material.page}` : 'Материал доклада'), ctx),
           ...(context.length ? [fittedText({
             field: 'body',
+            floor: material.kind === 'table' ? typography.absoluteMinFontSize : undefined,
             box: { ...box, h: contextHeight - 0.1 },
             paragraphs: context,
-            size: { max: 17, min: 13 },
+            size: textSize,
             style: {
               fontFace: fonts.body, color: colors.text, align: 'left',
-              valign: 'top', lineSpacing: 1, paragraphSpacing: 0,
+              valign: 'top', ...textSpacing,
             },
           })] : []),
           material.kind === 'table'
-            ? sourceTable(material.rows, box, fonts.body, typography.absoluteMinFontSize, material.merges)
-            : { type: 'image', box: sourceImageBox(material.png, imageBox), src: material.png },
+            ? sourceTable(material.rows, visualBox, fonts.body, typography.absoluteMinFontSize,
+              material.merges, isComparison ? comparisonTableStyle(ctx.theme) : undefined)
+            : { type: 'image', box: sourceImageBox(material.png, visualBox), src: material.png },
         ],
       }
     }

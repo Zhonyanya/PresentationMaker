@@ -16,6 +16,8 @@ from uuid import uuid4
 import pdfplumber
 from pdfplumber.utils import extract_text
 
+_MIN_COLUMN_GAP = 24
+
 
 @dataclass(frozen=True)
 class SourceTable:
@@ -250,7 +252,7 @@ def _line_gaps(line, *, min_glyphs=4):
     glyphs = [(index, char) for index, char in enumerate(chars) if char['text'].strip()]
     if len(glyphs) < 2 * min_glyphs:
         return []
-    min_gap = max(24, 2.5 * median(char['height'] for _, char in glyphs))
+    min_gap = max(_MIN_COLUMN_GAP, 2.5 * median(char['height'] for _, char in glyphs))
     return [
         (index, left['x1'], right['x0'])
         for position, ((_, left), (index, right)) in enumerate(pairwise(glyphs), 1)
@@ -293,7 +295,8 @@ def reading_regions[T](
     columns = defaultdict(list)
     for _, left, right, starts_band, item in sorted(items, key=lambda value: value[:2]):
         column = bisect_right(breaks, left)
-        if starts_band or column < bisect_left(breaks, right):
+        # A caption ending inside the gutter still belongs to its starting column.
+        if starts_band or column < bisect_left(breaks, right - _MIN_COLUMN_GAP / 2):
             yield from (columns[key] for key in sorted(columns))
             columns.clear()
             yield [item]

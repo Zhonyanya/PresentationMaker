@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import JSZip from 'jszip'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { SlideRenderer } from '@/features/slides/SlideRenderer'
+import { buildPresentationScenes } from '@/layouts/registry'
 import { samplePresentation } from '@/test/fixtures'
+import { presentationTheme } from '@/theme/presentation-theme'
 import { buildPptx, toFileName } from './pptx-export'
 
 async function exportToZip(includeNotes = true) {
@@ -84,6 +89,51 @@ it('exports a source table as native PowerPoint cells', async () => {
   expect(xml).toContain('<a:tbl>')
   expect(xml).toContain('<a:t>Участники</a:t>')
   expect(xml).toContain('<a:t>23</a:t>')
+})
+
+it('preserves a table caveat without repeating values already shown in cells', async () => {
+  const caveat = 'По телефону время ожидания не измеряли.'
+  const duplicated = 'Север. 2024 — 18; 2025 — 21'
+  const pptx = await buildPptx({
+    title: 'Доклад',
+    slides: [{
+      id: 'context-with-table', layout: 'text', title: 'Заявки', body: duplicated + '\n' + caveat,
+      sourceMaterial: {
+        kind: 'table', page: 1, rows: [['Группа', '2024', '2025'], ['Север', '18', '21']],
+      },
+    }],
+  })
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const xml = await slideXml(zip, 1)
+  expect(xml).toContain(caveat)
+  expect(xml).toContain('<a:tbl>')
+  expect(xml).toContain('<a:t>21</a:t>')
+  expect(xml).not.toContain(duplicated)
+})
+
+it('gives editable comparison tables a clear header in preview and PowerPoint', async () => {
+  const presentation = samplePresentation()
+  presentation.slides = [{
+    id: 'comparison-table', layout: 'text', title: 'Заявки', body: '',
+    sourceMaterial: {
+      kind: 'table', page: 1, rows: [['Группа', '2024', '2025'], ['Север', '18', '21']],
+    },
+  }]
+  const [scene] = buildPresentationScenes(presentation.slides, presentationTheme)
+  const html = renderToStaticMarkup(createElement(SlideRenderer, { scene, scale: 1 }))
+  expect(html).toContain('<th scope="col"')
+  expect(html.toLowerCase()).toContain(presentationTheme.colors.primary.toLowerCase())
+  const pptx = await buildPptx(presentation)
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const xml = await slideXml(zip, 1)
+  const [heading, dataRow] = xml.match(/<a:tr h="\d+">.*?<\/a:tr>/gs) ?? []
+  expect(heading).toContain('<a:srgbClr val="1F3A5F"/>')
+  expect(dataRow).toContain('<a:t>21</a:t>')
+  const frame = xml.match(/<p:graphicFrame>.*?<\/p:graphicFrame>/s)?.[0] ?? ''
+  const frameWidth = Number(frame.match(/<a:ext cx="(\d+)"/)?.[1])
+  const columnsWidth = [...frame.matchAll(/<a:gridCol w="(\d+)"/g)]
+    .reduce((total, column) => total + Number(column[1]), 0)
+  expect(Math.abs(frameWidth - columnsWidth)).toBeLessThanOrEqual(3)
 })
 
 it('exports both axes of a merged source cell as an editable PowerPoint grid', async () => {

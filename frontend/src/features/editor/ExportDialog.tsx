@@ -155,9 +155,9 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
             <div className="border-l-2 border-warning bg-warning-soft/60 px-4 py-3 text-[13px]">
               <p className="flex items-center gap-2 font-medium text-warning">
                 <TriangleAlert className="size-4" aria-hidden />
-                Слишком много текста на {problems.length} {plural(problems.length, ['слайде', 'слайдах', 'слайдах'])}
+                Переполнение на {problems.length} {plural(problems.length, ['слайде', 'слайдах', 'слайдах'])}
               </p>
-              <p className="mt-1 text-muted-foreground">Файл можно скачать, но шрифт будет мелким, а при очень большом объёме часть текста может не поместиться. Проверьте эти слайды или разделите их.</p>
+              <p className="mt-1 text-muted-foreground">Проверьте размер текста и границы таблиц. Перегруженный слайд можно разделить в редакторе.</p>
               <ul className="mt-2 flex flex-wrap gap-1.5">
                 {problems.map(({ slide, index }) => (
                   <li key={slide.id}>
