@@ -2,9 +2,11 @@ from datetime import timedelta
 from uuid import UUID
 
 from conftest import generate, headers, register
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.db.models import Job, Session, User, utcnow
+from app.main import create_app
 from app.worker import execute_job, maintenance, publish_result
 
 
@@ -190,14 +192,18 @@ def test_validation_body_limit_and_private_errors(client):
     assert response.status_code == 413
 
 
-def test_no_deferred_routes(client):
-    routes = client.get("/openapi.json").json()["paths"]
+def test_no_deferred_routes():
+    routes = TestClient(create_app()).get("/openapi.json").json()["paths"]
     # Список и удаление — часть контракта: пользователь управляет своими данными
     assert set(routes["/api/v1/presentations"]) == {"get", "post"}
     assert "delete" in routes["/api/v1/presentations/{identifier}"]
     assert "delete" in routes["/api/v1/auth/me"]
-    assert not any(
-        word in path
+    pdf_preview = "/api/v1/presentations/pdf-preview"
+    assert set(routes[pdf_preview]) == {"post"}
+    deferred_routes = [
+        path
         for path in routes
-        for word in ["versions", "assets", "preview", "export", "history"]
-    )
+        if path != pdf_preview
+        and any(word in path for word in ["versions", "assets", "preview", "export", "history"])
+    ]
+    assert deferred_routes == []
