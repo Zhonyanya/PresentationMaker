@@ -167,7 +167,7 @@ class TextSlide(SlideBase):
     body: text(4000)
     sourceMaterial: SourceMaterial | None = None
     composition: SlideComposition | None = None
-    textStyle: Literal["lead", "blocks", "steps"] | None = None
+    textStyle: Literal["lead", "blocks", "steps", "tree"] | None = None
 
 
 Items = Annotated[list[text(1000)], Field(max_length=12)]

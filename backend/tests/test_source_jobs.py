@@ -86,7 +86,13 @@ def test_generate_comparisons_uses_requested_slide_budget(monkeypatch):
         text="", source=source, mode="comparisons", slideCount=6, job_id="test",
         deadline=(datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
     )
-    assert [slide["layout"] for slide in result["slides"]] == ["title", *["text"] * 4, "closing"]
+    assert [slide["layout"] for slide in result["slides"]] == ["title", "text", "closing"]
+    chart = result["slides"][1]["composition"]
+    assert chart["categories"] == [f"Группа {n}" for n in range(5)]
+    assert chart["series"] == [
+        {"label": "2022", "values": [20] * 5},
+        {"label": "2023", "values": [35] * 5},
+    ]
 
 
 @pytest.mark.parametrize("source", [

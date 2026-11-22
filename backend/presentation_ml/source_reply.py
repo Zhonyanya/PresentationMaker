@@ -4,6 +4,8 @@ import re
 
 from pydantic import BaseModel, ConfigDict
 
+COMPARISON_CATEGORY_LIMIT = 6
+
 
 class TableClaim(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
@@ -19,7 +21,7 @@ class TableClaim(BaseModel):
 
 def table_comparison_chart(claims: list[TableClaim]) -> dict | None:
     """Use one chart only for distinct groups with the same metric, periods and units."""
-    if not 1 <= len(claims) <= 6:
+    if not 1 <= len(claims) <= COMPARISON_CATEGORY_LIMIT:
         return None
     categories = [claim.group for claim in claims]
     measures = {(claim.metric, claim.first_period, claim.second_period) for claim in claims}
@@ -51,17 +53,20 @@ def table_comparison_chart(claims: list[TableClaim]) -> dict | None:
     }
 
 
+def table_claim_from_fact(fact: dict) -> TableClaim:
+    if fact['relation'] != 'metric_comparison' or fact['status'] != 'reported':
+        raise ValueError('Unknown or incompatible table fact')
+    return TableClaim(fact_id=fact['id'], group=fact['subject'], metric=fact['target'],
+                      **fact['qualifiers'])
+
+
 def verified_table_claim(payload: dict, reply: object) -> dict:
     """Resolve one model claim against the exact fact packet sent to the model."""
     claim = TableClaim.model_validate(reply)
     fact = next((item for item in payload['source_facts'] if item['id'] == claim.fact_id), None)
-    if fact is None or fact['relation'] != 'metric_comparison' or fact['status'] != 'reported':
+    if fact is None:
         raise ValueError('Unknown or incompatible table fact')
-    expected = {
-        'fact_id': fact['id'], 'group': fact['subject'], 'metric': fact['target'],
-        **fact['qualifiers'],
-    }
-    if claim.model_dump() != expected:
+    if claim != table_claim_from_fact(fact):
         raise ValueError('Table claim differs from source evidence')
     return {
         'title': claim.metric,

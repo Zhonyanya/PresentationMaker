@@ -1,5 +1,6 @@
 import type { TextSlide } from '@/domain/presentation'
 import { contentBox, contentChrome, fittedText, lines } from './chrome'
+import { firstSentence, paragraphsOf } from './content-utils'
 import type { Box, SceneChart, SceneElement, SlideScene } from './scene'
 import { sourceTable } from './source-material'
 import type { RenderContext } from './types'
@@ -86,37 +87,79 @@ function comparisonChart(
   }
 }
 
+function comparisonTable(composition: Comparison, box: Box, ctx: RenderContext) {
+  return sourceTable([
+    ['Группа', ...composition.series.map((series) => series.label)],
+    ...composition.categories.map((name, index) => [
+      name, ...composition.series.map(({ values }) => formatComparisonValue(values[index], composition.unit)),
+    ]),
+  ], box, ctx.theme.fonts.body, ctx.theme.typography.absoluteMinFontSize)
+}
+
 function comparisonElements(
   slide: TextSlide, composition: Comparison, ctx: RenderContext,
 ): SceneElement[] {
   const box = contentBox(ctx)
   const { colors, typography } = ctx.theme
-  const hasContext = Boolean(slide.body.trim())
-  const chartWidth = hasContext ? box.w * 0.7 : box.w
-  const visualBox = { ...box, w: chartWidth }
-  const visual = comparisonChart(composition, visualBox, ctx) ?? sourceTable([
-    ['Группа', ...composition.series.map((series) => series.label)],
-    ...composition.categories.map((name, index) => [
-      name, ...composition.series.map(({ values }) => formatComparisonValue(values[index], composition.unit)),
-    ]),
-  ], visualBox, ctx.theme.fonts.body, typography.absoluteMinFontSize)
-  if (!hasContext) return [visual]
-  const asideX = box.x + chartWidth + 0.28
-  const asideWidth = box.w - chartWidth - 0.28
-  const [takeaway, ...details] = lines(slide.body).map((paragraph) => paragraph.text)
-  const innerX = asideX + 0.26
-  const innerWidth = asideWidth - 0.52
-  return [
-    visual,
-    { type: 'rect', box: { x: asideX, y: box.y + 0.42, w: asideWidth, h: box.h - 0.58 }, fill: colors.surface },
-    { type: 'rect', box: { x: asideX, y: box.y + 0.42, w: 0.055, h: box.h - 0.58 }, fill: colors.accent },
-    compositionText(ctx, 'body', takeaway, {
-      x: innerX, y: box.y + 0.82, w: innerWidth, h: details.length ? 1.25 : box.h - 1.23,
-    }, typography.heading, colors.primary, true, 'Вывод'),
-    ...(details.length ? [compositionText(ctx, 'body', details.join('\n'), {
-      x: innerX, y: box.y + 2.24, w: innerWidth, h: box.h - 2.67,
-    }, typography.body, colors.text)] : []),
+  const wideChart = comparisonChart(composition, box, ctx)
+  const [first, ...remaining] = paragraphsOf(slide.body)
+  if (!first) return [wideChart ?? comparisonTable(composition, box, ctx)]
+
+  const gap = 0.24
+  const padding = 0.23
+  const textSize = { ...typography.body, min: Math.min(typography.body.max, Math.max(16, typography.body.min)) }
+  const inset = (area: Box): Box => ({
+    x: area.x + padding, y: area.y + padding,
+    w: area.w - 2 * padding, h: area.h - 2 * padding,
+  })
+  const panel = (area: Box): SceneElement[] => [
+    { type: 'rect', box: area, fill: colors.surface },
+    { type: 'rect', box: { ...area, w: 0.055 }, fill: colors.accent },
   ]
+  const chartBox = { ...box, w: box.w * 0.7 }
+  const sideChart = comparisonChart(composition, chartBox, ctx)
+  const side = { ...box, x: box.x + chartBox.w + gap,
+    w: box.w - chartBox.w - gap, y: box.y + 0.4, h: Math.min(1.9, box.h - 0.4) }
+  const sideText = compositionText(ctx, 'body', slide.body, inset(side),
+    textSize, colors.text, false, 'Вывод')
+  if (!sideText.overflow && (sideChart || !wideChart)) {
+    const visual = sideChart ?? comparisonTable(composition, chartBox, ctx)
+    if (visual.box.h <= chartBox.h) return [visual, ...panel(side), sideText]
+  }
+
+  const takeaway = firstSentence(first)
+  const details = [first.slice(takeaway.length).trim(), ...remaining].filter(Boolean).join('\n')
+  const bands = [
+    { fraction: 0.29, split: true },
+    { fraction: 0.37, split: true },
+    { fraction: 0.46, split: true },
+    { fraction: 0.46, split: false },
+  ]
+  for (const { fraction, split } of bands) {
+    const height = box.h * fraction
+    const area = { ...box, y: box.y + box.h - height, h: height }
+    const inner = inset(area)
+    const columnWidth = inner.w * 0.38
+    const start = split && details ? { ...inner, w: columnWidth } : inner
+    const leadText = compositionText(ctx, 'body', split ? takeaway : slide.body, start,
+      textSize, split ? colors.primary : colors.text, split, 'Вывод')
+    const context = [leadText]
+    if (split && details) {
+      context.push(compositionText(ctx, 'body', details, {
+        ...inner, x: inner.x + columnWidth + gap, w: inner.w - columnWidth - gap,
+      }, textSize, colors.text, false, 'Пояснение'))
+    }
+    if (context.some((text) => text.overflow)) continue
+    const visualBox = { ...box, h: box.h - height - gap }
+    const visual = wideChart ? { ...wideChart, box: visualBox } : comparisonTable(composition, visualBox, ctx)
+    if (visual.box.h <= visualBox.h) return [visual, ...panel(area), ...context]
+  }
+
+  // Keep full text and the usual overflow indication for unusually dense input.
+  const area = { ...side, h: box.h - 0.4 }
+  const visual = sideChart ?? comparisonTable(composition, chartBox, ctx)
+  return [visual, ...panel(area), compositionText(ctx, 'body', slide.body, inset(area),
+    typography.body, colors.text, false, 'Вывод')]
 }
 
 function contextElements(slide: TextSlide, ctx: RenderContext): SceneElement[] {

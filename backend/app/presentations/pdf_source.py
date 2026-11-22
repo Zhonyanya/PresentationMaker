@@ -2,13 +2,19 @@
 
 import re
 from base64 import b64encode
+from bisect import bisect_left, bisect_right
+from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from io import BytesIO
+from itertools import pairwise
+from statistics import median
 from textwrap import TextWrapper
 from typing import BinaryIO
 from uuid import uuid4
 
 import pdfplumber
+from pdfplumber.utils import extract_text
 
 
 @dataclass(frozen=True)
@@ -100,6 +106,8 @@ class SourceParagraph:
     top: float
     left: float
     text: str
+    right: float | None = None
+    starts_band: bool = False
 
 
 @dataclass(frozen=True)
@@ -110,6 +118,7 @@ class SourcePage:
     images: tuple[tuple[float, float, float, float], ...]
     figures: tuple[SourceFigure, ...] = ()
     paragraphs: tuple[SourceParagraph, ...] = ()
+    column_breaks: tuple[float, ...] = ()
 
 
 def _contains(outer, inner):
@@ -227,10 +236,124 @@ def _prose_paragraphs(lines) -> tuple[SourceParagraph, ...]:
         group.append(line)
     if group:
         paragraphs.append(group)
-    return tuple(
-        SourceParagraph(group[0]['top'], group[0]['x0'], ' '.join(line['text'] for line in group))
-        for group in paragraphs
-    )
+    return tuple(SourceParagraph(
+        group[0]['top'], min(line['x0'] for line in group),
+        ' '.join(line['text'] for line in group), max(line['x1'] for line in group),
+        group[0].get('starts_band', False),
+    ) for group in paragraphs)
+
+
+def _line_gaps(line, *, min_glyphs=4):
+    chars = line['chars']
+    if any(not char['upright'] for char in chars):
+        return []
+    glyphs = [(index, char) for index, char in enumerate(chars) if char['text'].strip()]
+    if len(glyphs) < 2 * min_glyphs:
+        return []
+    min_gap = max(24, 2.5 * median(char['height'] for _, char in glyphs))
+    return [
+        (index, left['x1'], right['x0'])
+        for position, ((_, left), (index, right)) in enumerate(pairwise(glyphs), 1)
+        if min_glyphs <= position <= len(glyphs) - min_glyphs
+        and right['x0'] - left['x1'] >= min_gap
+    ]
+
+
+def _column_breaks(gaps_by_line) -> tuple[float, ...]:
+    """Find gutters supported by repeated visual gaps, favouring their common centre."""
+    events = defaultdict(int)
+    for gaps in gaps_by_line:
+        for _, left, right in gaps:
+            events[left] += 1
+            events[right] -= 1
+    columns = []
+    overlap = 0
+    best = (0, 0.0, 0.0)
+    points = sorted(events.items())
+    for (x, change), (end, _) in pairwise(points):
+        overlap += change
+        width = end - x
+        if overlap >= 2:
+            peak, best_width, _ = best
+            if (overlap >= 3 or width >= 48) and (overlap, width) > (peak, best_width):
+                best = overlap, width, (x + end) / 2
+        else:
+            if best[0]:
+                columns.append(best[2])
+            best = (0, 0.0, 0.0)
+    if best[0]:
+        columns.append(best[2])
+    return tuple(columns)
+
+
+def reading_regions[T](
+    items: list[tuple[float, float, float, bool, T]], breaks: tuple[float, ...],
+) -> Iterator[list[T]]:
+    """Read columns left to right within each band between full-width items."""
+    columns = defaultdict(list)
+    for _, left, right, starts_band, item in sorted(items, key=lambda value: value[:2]):
+        column = bisect_right(breaks, left)
+        if starts_band or column < bisect_left(breaks, right):
+            yield from (columns[key] for key in sorted(columns))
+            columns.clear()
+            yield [item]
+        else:
+            columns[column].append(item)
+    yield from (columns[key] for key in sorted(columns))
+
+
+def _positioned_lines(prose):
+    lines = prose.extract_text_lines()
+    # Text maps can attribute several letters of a ligature to one glyph.
+    # Re-extraction must see that original glyph only once.
+    for line in lines:
+        line['chars'] = list({id(char): char for char in line['chars']}.values())
+    gaps_by_line = [_line_gaps(line) for line in lines]
+    breaks = _column_breaks(gaps_by_line)
+    if not breaks:
+        return (lines,), breaks
+
+    positioned = []
+    for line in lines:
+        gaps = _line_gaps(line, min_glyphs=1)
+        splits = [index for index, left, right in gaps if any(left < x < right for x in breaks)]
+        if not splits:
+            positioned.append((line['top'], line['x0'], line['x1'], line))
+            continue
+        chars = line['chars']
+        stops = [0, *splits, len(chars)]
+        for start, end in pairwise(stops):
+            segment = chars[start:end]
+            visible = [char for char in segment if char['text'].strip()]
+            if not visible:
+                continue
+            bounds = {
+                'x0': min(char['x0'] for char in visible),
+                'x1': max(char['x1'] for char in visible),
+                'top': min(char['top'] for char in visible),
+                'bottom': max(char['bottom'] for char in visible),
+            }
+            text = extract_text(segment).strip()
+            positioned.append((bounds['top'], bounds['x0'], bounds['x1'], dict(bounds, text=text)))
+    positioned.sort(key=lambda item: item[:2])
+    for previous, current, following in zip(
+        positioned, positioned[1:], positioned[2:], strict=False,
+    ):
+        _, left, right, line = current
+        _, next_left, next_right, next_line = following
+        height = line['bottom'] - line['top']
+        next_height = next_line['bottom'] - next_line['top']
+        if (
+            right < breaks[0] < next_right and abs(next_left - left) <= 10
+            and len(line['text']) <= 90 and not line['text'].endswith(('.', '!', '?', ';'))
+            and height >= 1.15 * next_height
+            and line['top'] - previous[3]['bottom'] >= 0.65 * height
+            and 0 < next_line['top'] - line['bottom'] <= 2 * height
+        ):
+            line['starts_band'] = True
+    items = [(top, left, right, line.get('starts_band', False), line)
+             for top, left, right, line in positioned]
+    return tuple(reading_regions(items, breaks)), breaks
 
 
 def read_pdf(source: BinaryIO, *, max_pages: int = 250) -> tuple[SourcePage, ...]:
@@ -259,10 +382,12 @@ def read_pdf(source: BinaryIO, *, max_pages: int = 250) -> tuple[SourcePage, ...
                     for x0, top, x1, bottom in excluded
                 ),
             )
-            lines = prose.extract_text_lines(return_chars=False)
+            regions, breaks = _positioned_lines(prose)
             result.append(SourcePage(
-                page.page_number, '\n'.join(line['text'] for line in lines), tables, images, figures,
-                _prose_paragraphs(lines),
+                page.page_number, '\n'.join(line['text'] for region in regions for line in region),
+                tables, images, figures,
+                tuple(paragraph for region in regions for paragraph in _prose_paragraphs(region)),
+                breaks,
             ))
             page.close()
     return tuple(result)

@@ -77,6 +77,94 @@ def test_generation_rejects_unresolved_evidence_on_content_slide(monkeypatch, ev
         })
 
 
+def test_generation_renders_exact_numeric_source_paragraph_before_filling_closing(monkeypatch):
+    paragraph = ("Журнал был недоступен 9–11 декабря. После восстановления в сводку "
+                 "вернули 11 записей о завершённых занятиях.")
+    source = {"blocks": [{"kind": "text", "id": "journal", "page": 2, "text": paragraph},
+                         {"kind": "text", "id": "limits", "text": "Данные требуют оговорки."}]}
+
+    def inspect(request):
+        assert request["payload"]["verbatim_blocks"] == ["block-1"]
+        assert "[block-1]\n" + paragraph in request["payload"]["text"]
+        proposal = request["schema"]["properties"]["plan"]["items"]["properties"]
+        assert proposal["verbatim_block_ids"]["items"]["enum"] == ["block-1"]
+
+    result = planned_generation(monkeypatch, {
+        "title": "Занятия",
+        "plan": [{**intent("Ограничения учёта", "block-1", "block-2"),
+                  "verbatim_block_ids": ["block-1"]}],
+        "slides": [{"id": "journal-slide", "layout": "text", "title": "Учёт",
+                    "body": "Данные требуют оговорки."}],
+    }, source=source, inspect_request=inspect)
+    _, content, closing = result.document["slides"]
+    assert content["id"] == "journal-slide"
+    assert content["body"] == "Данные требуют оговорки.\n\n" + paragraph
+    assert paragraph in closing["subtitle"]
+    assert result.plan.slides[1].intents[0].evidence[0].block_id == "journal"
+
+
+@pytest.mark.parametrize(("ids", "layout"), [
+    (["block-2"], "text"),
+    (["block-3"], "text"),
+    (["block-1", "block-1"], "text"),
+    (["block-1"], "title"),
+])
+def test_generation_validates_verbatim_references(monkeypatch, ids, layout):
+    source = {"blocks": [
+        {"kind": "text", "id": "journal", "text": "В отчёт вернули 11 старых записей о занятиях."},
+        {"kind": "text", "id": "notes", "text": "Обсуждение всё ещё продолжается."},
+    ]}
+    with pytest.raises(ValueError, match="verbatim"):
+        planned_generation(monkeypatch, {
+            "title": "Занятия",
+            "plan": [{**intent("Учёт", "block-1"), "verbatim_block_ids": ids}],
+            "slides": [{"layout": layout, "title": "Учёт", "body": ""}],
+        }, source=source)
+
+
+def test_generation_can_print_a_verbatim_paragraph_in_the_closing(monkeypatch):
+    paragraph = "После восстановления в сводку вернули 11 записей о завершённых занятиях."
+    result = planned_generation(monkeypatch, {
+        "title": "Занятия",
+        "plan": [intent("Обзор", "block-1"),
+                 {**intent("Ограничения учёта"), "verbatim_block_ids": ["block-1"]}],
+        "slides": [{"layout": "text", "title": "Учёт", "body": "Сверили сводку."},
+                   {"layout": "closing", "title": "Итог", "subtitle": "Продолжим сверку."}],
+    }, source={"blocks": [{"kind": "text", "id": "journal", "text": paragraph}]})
+    assert result.document["slides"][-1]["subtitle"] == paragraph
+
+
+def test_verbatim_final_block_preserves_may_decision_without_repeating_its_summary(monkeypatch):
+    decision = ("На май утверждён порог учёта остановок две минуты для всех машин. "
+                "Обновление двух других датчиков пока не согласовано. "
+                "Замена датчика обошлась в 38 тысяч рублей. Окупаемость пока не оценивали.")
+    draft = ("Согласовали общий порог регистрации для всех машин на май. "
+             "Решение об обновлении двух оставшихся датчиков ещё не принято. "
+             "До оценки окупаемости известна только стоимость замены. "
+             "Обновление остальных датчиков потребует отдельного решения.")
+    assert len(decision + draft) > 400
+    source = {"blocks": [
+        {"kind": "text", "id": "observations", "text": "Наблюдение после замены длилось два дня."},
+        {"kind": "text", "id": "plans", "text": decision},
+    ]}
+    deck = planned_generation(monkeypatch, {
+        "title": "Участок упаковки",
+        "plan": [intent("Тема"), intent("Наблюдения", "block-1"),
+                 {**intent("Действия", "block-2"), "verbatim_block_ids": ["block-2"]}],
+        "slides": [
+            {"layout": "title", "title": "Участок упаковки"},
+            {"layout": "text", "title": "Наблюдения", "body": "Наблюдение длилось два дня."},
+            {"id": "may", "layout": "text", "title": "Планы на май", "body": draft,
+             "notes": "Проверено по докладу."},
+        ],
+    }, source=source, slide_count=3)
+    _, observations, closing = deck.document["slides"]
+    assert observations["body"] == "Наблюдение длилось два дня."
+    assert closing == {"id": "may", "layout": "closing", "title": "Планы на май",
+                       "subtitle": decision, "notes": "Проверено по докладу."}
+    assert deck.plan.slides[-1].intents[0].evidence[0].block_id == "plans"
+
+
 @pytest.mark.parametrize("long_source", [False, True])
 def test_compaction_preserves_intents_and_binds_inserted_boundaries(monkeypatch, long_source):
     first, second = SOURCE["blocks"]
@@ -87,16 +175,45 @@ def test_compaction_preserves_intents_and_binds_inserted_boundaries(monkeypatch,
                  intent("Выдача до 14:00", "block-2")],
         "slides": [
             {"layout": "text", "title": "Запись", "body": "Запишитесь заранее."},
-            {"layout": "text", "title": "Суббота", "body": "Выдача до 14:00."},
+            {"layout": "text", "id": "saturday", "title": "Суббота", "body": "Выдача до 14:00."},
         ],
     }, slide_count=3, source=source if long_source else SOURCE)
     slides = result.document["slides"]
     assert [slide["layout"] for slide in slides] == ["title", "text", "closing"]
     assert [slide.slide_id for slide in result.plan.slides] == [slide["id"] for slide in slides]
-    assert [part.takeaway for part in result.plan.slides[1].intents] == [
-        "Требуется запись", "Выдача до 14:00",
-    ]
+    assert [part.takeaway for part in result.plan.slides[1].intents] == ["Требуется запись"]
+    assert slides[1]["body"] == "Запишитесь заранее."
+    assert slides[2]["id"] == "saturday"
+    assert slides[2]["subtitle"] == "Выдача до 14:00."
     assert result.plan.slides[2].intents[0].evidence[0].block_id == "p2-text"
+
+
+@pytest.mark.parametrize(("variant", "expected"), [
+    ("partial", "Запись в 2025 году сохранялась."),
+    ("uncited", "Запись в 205 году сохранялась."),
+    ("ambiguous", "Запись в 205 году сохранялась."),
+    ("other_words", "Запись в 205 году прекращалась."),
+    ("full_year", "Запись в 2026 году сохранялась."),
+])
+def test_generation_restores_a_truncated_year_only_from_unambiguous_evidence(
+    monkeypatch, variant, expected,
+):
+    sentence = {
+        "other_words": "Запись в 205 году прекращалась.",
+        "full_year": "Запись в 2026 году сохранялась.",
+    }.get(variant, "Запись в 205 году сохранялась.")
+    source = {"blocks": [
+        {"kind": "text", "id": "rule", "text": "Условия. Запись в 2025 году сохранялась."},
+        {"kind": "text", "id": "other", "text": "Запись в 2005 году сохранялась."
+         if variant == "ambiguous" else "Приходите вовремя."},
+    ]}
+    ids = ["block-2"] if variant == "uncited" else ["block-1", "block-2"]
+    result = planned_generation(monkeypatch, {
+        "title": "Учёт",
+        "plan": [intent("Условия", *ids)],
+        "slides": [{"layout": "text", "title": "Запись", "body": f"Вводная. {sentence}"}],
+    }, source=source)
+    assert result.document["slides"][1]["body"] == f"Вводная. {expected}"
 
 
 def test_joined_heading_keeps_the_heading_and_content_intents(monkeypatch):
@@ -242,6 +359,110 @@ def test_plan_assigns_text_composition_without_rewriting_text(monkeypatch, kind,
     slide = result.document["slides"][1]
     assert slide["body"] == body
     assert slide.get("textStyle") == expected
+
+
+@pytest.mark.parametrize("outline_is_supported", [True, False])
+def test_plan_applies_tree_only_to_supported_branches(monkeypatch, outline_is_supported):
+    body = ("Сервисы библиотеки\nЧитальный зал\n  Работа с подлинниками.\n"
+            "Удалённый доступ\n  Запрос копий.")
+    outline = body.replace("\n  ", "\n- ")
+    if not outline_is_supported:
+        outline = outline.replace("Работа с подлинниками.", "Запрос копий.", 1)
+        outline = outline.rsplit("Запрос копий.", 1)[0] + "Работа с подлинниками."
+    source = {"blocks": [
+        {"kind": "text", "id": "outline", "text": outline},
+    ]}
+    result = planned_generation(monkeypatch, {
+        "title": "Услуги",
+        "plan": [intent("Перечислить сервисы", "block-1", visual_kind="tree")],
+        "slides": [{"layout": "text", "title": "Каналы обслуживания", "body": body}],
+    }, source=source)
+    slide = result.document["slides"][1]
+    assert slide["body"] == body
+    assert slide.get("textStyle") == ("tree" if outline_is_supported else None)
+
+
+def test_tree_can_cite_a_source_block_for_each_node(monkeypatch):
+    lines = ["Сервисы библиотеки"]
+    for label in ("Читальный зал", "Удалённый доступ", "Межбиблиотечный обмен"):
+        lines.extend([label, "  Первое действие.", "  Второе действие."])
+    source = {"blocks": [
+        {"kind": "text", "id": f"line-{index}", "text": line.replace("  ", "- ", 1)}
+        for index, line in enumerate(lines, 1)
+    ]}
+    ids = [f"block-{index}" for index in range(1, len(lines) + 1)]
+    result = planned_generation(monkeypatch, {
+        "title": "Услуги",
+        "plan": [intent("Перечислить сервисы", *ids, visual_kind="tree")],
+        "slides": [{"layout": "text", "title": "Каналы обслуживания", "body": "\n".join(lines)}],
+    }, source=source)
+    assert result.document["slides"][1]["textStyle"] == "tree"
+
+
+@pytest.mark.parametrize("title", ["Услуги архива", "Каналы доступа"])
+@pytest.mark.parametrize(("body", "expected_tree"), [
+    ("Каналы доступа\nЧитальный зал — работа с подлинниками. Телефон — консультации.", True),
+    ("Каналы доступа\nЧитальный зал — работа с подлинниками. "
+     "Телефон — консультации и заказы.", False),
+    ("Каналы доступа\nЧитальный зал — консультации. Телефон — работа с подлинниками.", False),
+    ("Каналы доступа\nЧитальный зал — работа с подлинниками. Телефон — консультации.\n"
+     "Доступ только по будням.", False),
+])
+def test_plain_plan_recovers_tree_only_when_the_whole_body_matches(
+    monkeypatch, title, body, expected_tree,
+):
+    if title == "Каналы доступа":
+        body = body.removeprefix(f"{title}\n")
+    source = {"blocks": [
+        {"kind": "text", "id": f"line-{index}", "text": line}
+        for index, line in enumerate(("Каналы доступа", "Читальный зал", "- Работа с подлинниками.",
+                                     "Телефон", "- Консультации."), 1)
+    ]}
+    result = planned_generation(monkeypatch, {
+        "title": "Архив",
+        "plan": [intent("Доступ к архиву", "block-1", "block-2", "block-4")],
+        "slides": [{"layout": "text", "title": title, "body": body}],
+    }, source=source)
+    slide = result.document["slides"][1]
+    if expected_tree:
+        assert slide["textStyle"] == "tree"
+        assert slide["body"] == (
+            "Каналы доступа\nЧитальный зал\n  Работа с подлинниками.\nТелефон\n  Консультации."
+        )
+    else:
+        assert "textStyle" not in slide
+        assert slide["body"] == body
+
+
+@pytest.mark.parametrize("variant", ["source", "swapped", "ordinary", "unordered", "changed"])
+def test_procedure_recovery_respects_source_order_and_conditions(monkeypatch, variant):
+    title = "Порядок выдачи" if variant != "ordinary" else "Сведения о выдаче"
+    actions = ["Покажите пропуск.", "Получите талон.", "Подойдите к окну."]
+    conditions = "Доступ подтверждает сотрудник. Срок зависит от наличия дела."
+    body_conditions = "Доступ подтверждает сотрудник; срок зависит от наличия дела."
+    actual = actions[::-1] if variant == "swapped" else actions
+    if variant == "changed":
+        body_conditions = body_conditions.replace("зависит", "не зависит")
+    body = " ".join([*actual, body_conditions])
+    source = {"blocks": [
+        {"kind": "text", "id": f"line-{index}", "text": line}
+        for index, line in enumerate([
+            title, *[f"- {action}" if variant == "unordered" else action for action in actions],
+            "Условия выдачи", conditions,
+        ], 1)
+    ]}
+    result = planned_generation(monkeypatch, {
+        "title": "Архив",
+        "plan": [intent("Выдача дела", "block-1", "block-2", "block-3", "block-4", "block-6")],
+        "slides": [{"layout": "text", "title": title, "body": body}],
+    }, source=source)
+    slide = result.document["slides"][1]
+    if variant == "source":
+        assert slide["textStyle"] == "steps"
+        assert slide["body"] == "\n".join(actions) + "\n\nУсловия выдачи\n" + conditions
+    else:
+        assert "textStyle" not in slide
+        assert slide["body"] == body
 
 
 def test_revision_of_body_keeps_source_owned_composition(monkeypatch):

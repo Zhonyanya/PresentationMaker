@@ -108,7 +108,7 @@ export const textSlideSchema = z.object({
   body: text(4000),
   sourceMaterial: sourceMaterialSchema.optional(),
   composition: compositionSchema.optional(),
-  textStyle: z.enum(['lead', 'blocks', 'steps']).optional(),
+  textStyle: z.enum(['lead', 'blocks', 'steps', 'tree']).optional(),
 })
 
 export const bulletsSlideSchema = z.object({

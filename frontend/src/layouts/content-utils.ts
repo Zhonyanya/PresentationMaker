@@ -15,3 +15,9 @@ export function paragraphsOf(text: string | undefined): string[] {
 export function nonEmpty(items: string[]): string[] {
   return items.map((t) => t.trim()).filter(Boolean)
 }
+
+const sentences = new Intl.Segmenter('ru', { granularity: 'sentence' })
+
+export function firstSentence(text: string): string {
+  return sentences.segment(text).containing(0)?.segment.trim() ?? text
+}

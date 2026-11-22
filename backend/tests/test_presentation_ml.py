@@ -142,7 +142,9 @@ def test_budget_merge_preserves_column_labels_and_notes(monkeypatch, ml, inputs)
     result = ml.generate(**dict(inputs, text='Source material. ' * 100, slideCount=3))
     assert len(result['slides']) == 3
     merged = result['slides'][1]
-    for fragment in ['Comparison', 'Before', '48 kg/day', 'After', '33 kg/day',
+    assert merged['title'] == 'Comparison'
+    assert 'Comparison' not in merged['body']
+    for fragment in ['Before', '48 kg/day', 'After', '33 kg/day',
                      'Limits', 'Budget not approved']:
         assert fragment in merged['body']
     assert 'One site only.' in merged['notes']
@@ -239,6 +241,19 @@ def test_text_presentation_style_does_not_restrict_command_revision(monkeypatch,
     provider(monkeypatch, ml, response)
     revised = revise(ml, inputs, document, [1])
     assert revised["slides"] == [{**response["slides"][0], "textStyle": "lead"}]
+
+
+def test_revising_tree_body_removes_previously_verified_style(monkeypatch, ml, inputs):
+    original = {"title": "Архив", "slides": [{
+        "id": "access", "layout": "text", "title": "Запись", "textStyle": "tree",
+        "body": "Доступ\nЧитальный зал\n  Подлинники\nДистанционно\n  Копии",
+    }]}
+    candidate = copy.deepcopy(original)
+    candidate["slides"][0]["body"] = "Запишитесь заранее."
+    provider(monkeypatch, ml, candidate)
+    result = revise(ml, inputs, original, [1])
+    assert result["slides"][0]["body"] == "Запишитесь заранее."
+    assert "textStyle" not in result["slides"][0]
 
 
 @pytest.fixture
@@ -604,7 +619,8 @@ def test_v3_packs_short_sections_without_losing_text_or_notes(monkeypatch, ml, v
         {'layout': 'text', 'title': 'Navigation', 'body': 'Some visitors had difficulty.',
          'notes': 'Proposal is not approved.'},
         {'layout': 'bullets', 'title': 'Limits', 'bullets': ['No visitor counts measured',
-                                                         'Budget not approved']},
+                                                         'Budget not approved'],
+         'notes': 'Use the figures only for the pilot.'},
     ]}
     original = copy.deepcopy(candidate)
     provider(monkeypatch, ml, candidate)
@@ -612,14 +628,39 @@ def test_v3_packs_short_sections_without_losing_text_or_notes(monkeypatch, ml, v
     assert len(result['slides']) == 4
     assert result['slides'][0]['layout'] == 'title'
     assert result['slides'][-1]['layout'] == 'closing'
-    visible = '\n'.join(s.get('body', '') for s in result['slides'])
+    visible = '\n'.join(ml._slide_text(s) for s in result['slides'])
     for fragment in ('Feedback', 'Calm light', 'Clear labels', 'Navigation',
                      'Some visitors had difficulty.', 'Limits',
                      'No visitor counts measured', 'Budget not approved'):
-        assert fragment in visible
+        assert visible.count(fragment) == 1
+    assert result['slides'][-1]['title'] == 'Limits'
+    assert result['slides'][-1]['subtitle'] == 'No visitor counts measured\nBudget not approved'
+    assert result['slides'][-1]['notes'] == 'Use the figures only for the pilot.'
     assert any('Proposal is not approved.' in s.get('notes', '') for s in result['slides'])
     assert all(len(s.get('body', '')) <= 800 for s in result['slides'])
     assert candidate == original
+
+@pytest.mark.parametrize('explicit_closing', [False, True])
+def test_short_merge_keeps_section_headings_once_and_preserves_long_content(
+    monkeypatch, ml, inputs, explicit_closing,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    details = 'А' * 399 + '\U0001f600'
+    closing = {'layout': 'closing', 'title': 'Дальше', 'subtitle': 'Проверьте условия.'}
+    candidate = {'title': 'Доклад', 'slides': [
+        {'layout': 'title', 'title': 'Доклад'},
+        {'layout': 'text', 'title': 'Условия', 'body': 'Срок не гарантирован.'},
+        {'layout': 'text', 'title': 'Ограничения', 'body': details},
+        *([closing] if explicit_closing else []),
+    ]}
+    provider(monkeypatch, ml, candidate)
+    result = ml.generate(**dict(inputs, slideCount=3))
+    _, content, last = result['slides']
+    assert content['title'] == 'Условия'
+    assert content['body'] == f'Срок не гарантирован.\n\nОграничения\n{details}'
+    expected = 'Проверьте условия.' if explicit_closing else 'Срок не гарантирован.'
+    assert last['subtitle'] == expected
+
 
 def test_generation_joins_heading_with_untitled_content_verbatim(monkeypatch, ml, inputs):
     candidate = {'title': 'Report', 'slides': [
@@ -641,6 +682,148 @@ def test_generation_joins_heading_with_untitled_content_verbatim(monkeypatch, ml
         assert fragment in slide['body']
     assert 'Header note' in slide['notes'] and 'Content note' in slide['notes']
     assert candidate == snapshot
+
+
+@pytest.mark.parametrize(('extra', 'draft', 'expected'), [
+    ('', 'Уменьшенный гарнир — 28% заказов.', 'Уменьшенный гарнир — 28% заказов с гарниром.'),
+    (' В другом пилоте уменьшенный гарнир выбирали в 28% заказов без подписки.',
+     'Уменьшенный гарнир — 28% заказов.', 'Уменьшенный гарнир — 28% заказов.'),
+    (' Обычный гарнир выбирали в 28% заказов.',
+     'Уменьшенный гарнир — 28% заказов.', 'Уменьшенный гарнир — 28% заказов.'),
+    ('', 'Доставка курьером — 28% заказов.', 'Доставка курьером — 28% заказов.'),
+    ('', 'Уменьшенный гарнир — 28% всех заказов.', 'Уменьшенный гарнир — 28% всех заказов.'),
+    ('', 'Уменьшенный гарнир — 28% заказов в филиале.',
+     'Уменьшенный гарнир — 28% заказов в филиале.'),
+    ('', 'Уменьшенный гарнир — на 28% заказов.', 'Уменьшенный гарнир — на 28% заказов.'),
+    ('', 'Уменьшенный гарнир не брали в 28% заказов.',
+     'Уменьшенный гарнир не брали в 28% заказов.'),
+])
+def test_generation_restores_omitted_percentage_scope_only_when_source_is_unambiguous(
+    monkeypatch, ml, inputs, extra, draft, expected,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    source = 'Уменьшенную порцию гарнира выбирали в 28 процентах заказов с гарниром.' + extra
+    candidate = {'title': 'Пилот', 'slides': [
+        {'layout': 'title', 'title': 'Пилот'},
+        {'id': 'result', 'layout': 'section', 'title': 'Доля', 'subtitle': draft,
+         'notes': 'Оговорки.'},
+        {'layout': 'closing', 'title': 'Итог', 'subtitle': 'Продолжим измерения.'},
+    ]}
+    calls = provider(monkeypatch, ml, candidate)
+    result = ml.generate(**dict(inputs, text=source))
+    assert len(calls) == 1
+    assert result['slides'][1] == dict(candidate['slides'][1], subtitle=expected)
+
+
+def test_generation_restores_percentage_scope_from_a_cited_source_block(monkeypatch, ml, inputs):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    source = {'blocks': [{
+        'id': 'sample', 'kind': 'text',
+        'text': 'Teams completed training in 30.5 percent of sites with night shifts.',
+    }]}
+    intent = {'goal': 'Show participation', 'takeaway': 'Training sites', 'visual_intent': 'Rate',
+              'evidence_ids': ['block-1']}
+    candidate = {'title': 'Training', 'plan': [intent], 'slides': [
+        {'layout': 'bullets', 'title': 'Results',
+         'bullets': ['Completed training — 30.5% of sites.']},
+    ]}
+    provider(monkeypatch, ml, candidate)
+    deck = ml._generate(**inputs, source=source)
+    assert deck.document['slides'][1]['bullets'] == [
+        'Completed training — 30.5% of sites with night shifts.',
+    ]
+    assert deck.plan.slides[1].intents[0].evidence[0].block_id == 'sample'
+
+
+def test_percentage_scope_keeps_different_actions_separate(monkeypatch, ml, inputs):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    text = (
+        'In the pilot project, analysts reviewed 20% of the applications at the central site. '
+        'In the pilot project, staff rejected twenty percent of the applications '
+        'at the remote site.'
+    )
+    draft = 'In the pilot project, staff rejected 20% of the applications.'
+    candidate = {'title': 'Pilot', 'slides': [
+        {'layout': 'text', 'title': 'Applications', 'body': draft},
+        {'layout': 'closing', 'title': 'Results', 'subtitle': 'Pilot completed.'},
+    ]}
+    provider(monkeypatch, ml, candidate)
+    assert ml.generate(**dict(inputs, text=text))['slides'][1]['body'] == draft
+
+
+def test_percentage_scope_does_not_use_uncited_paragraph_on_planned_slide(
+    monkeypatch, ml, inputs,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    draft = 'Completed training — 30.5% of sites.'
+    source = {'blocks': [
+        {'id': 'sample', 'kind': 'text',
+         'text': 'Teams completed training in 30.5 percent of sites with night shifts.'},
+        {'id': 'overview', 'kind': 'text', 'text': 'Training participation is reviewed monthly.'},
+    ]}
+    intent = {'goal': 'Show participation', 'takeaway': 'Training sites', 'visual_intent': 'Rate',
+              'evidence_ids': ['block-2']}
+    candidate = {'title': 'Training', 'plan': [intent], 'slides': [
+        {'layout': 'text', 'title': 'Results', 'body': draft},
+    ]}
+    provider(monkeypatch, ml, candidate)
+    assert ml._generate(**inputs, source=source).document['slides'][1]['body'] == draft
+
+
+def test_generation_places_dense_section_subtitles_on_content_slides(monkeypatch, ml, inputs):
+    details = ('В пилоте участвовали четыре площадки. Учёт занимал 15 минут в день. '
+               'Контрольной группы не было. Опрос посетителей не проводили. '
+               'Применимость подхода в других корпусах пока не проверяли.')
+    candidate = {'title': 'Пилот', 'slides': [
+        {'layout': 'title', 'title': 'Пилот'},
+        {'id': 'division', 'layout': 'section', 'title': 'Результаты',
+         'subtitle': 'Апрельский пилот.'},
+        {'id': 'constraints', 'layout': 'section', 'title': 'Ограничения',
+         'subtitle': details, 'notes': 'Только пилотный период.'},
+        {'layout': 'closing', 'title': 'Итог', 'subtitle': 'Нужна повторная проверка.'},
+    ]}
+    provider(monkeypatch, ml, candidate)
+    result = ml.generate(**dict(inputs, slideCount=4))
+    assert result['slides'][1] == candidate['slides'][1]
+    assert result['slides'][2] == {
+        'id': 'constraints', 'layout': 'text', 'title': 'Ограничения',
+        'body': details, 'notes': 'Только пилотный период.',
+    }
+
+
+@pytest.mark.parametrize('structured', [False, True])
+def test_v4_sends_literal_review_sections_without_mixing_results_and_targets(
+    monkeypatch, ml, inputs, structured,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    paragraphs = [
+        'Что не получилось', 'Учёт занимал около 15 минут в день.',
+        '1. Ограничения исследования', 'Контрольной столовой не было.',
+        '• Опрос удовлетворённости не проводили',
+        'Краткая справка', 'Отчёт подготовила команда пилота.',
+        'Предложение по следующему этапу', 'Цель на следующий этап — до 15 минут на смену.',
+    ]
+    intent = dict(goal='Показать ограничения', takeaway='Пилот без контроля',
+                  visual_intent='Ограничения', evidence_ids=['block-4'])
+    candidate = {'title': 'Пилот', 'slides': [
+        {'layout': 'text', 'title': 'Ограничения', 'body': 'Контрольной столовой не было.'},
+    ]}
+    options = dict(inputs, text='\r\n\r\n'.join(paragraphs))
+    if structured:
+        candidate['plan'] = [intent]
+        options['source'] = {'blocks': [
+            {'kind': 'text', 'id': f'b{i}', 'text': value}
+            for i, value in enumerate(paragraphs)
+        ]}
+    calls = provider(monkeypatch, ml, candidate)
+    ml.generate(**options)
+    assert len(calls) == 1
+    assert calls[0]['payload']['review_sections'] == {
+        'observed': ['Учёт занимал около 15 минут в день.'],
+        'limitations': ['Контрольной столовой не было.', '• Опрос удовлетворённости не проводили'],
+        'proposed': ['Цель на следующий этап — до 15 минут на смену.'],
+    }
+    assert 'review_sections' in calls[0]['system']
 
 
 def test_v5_extracts_section_labels_as_source_data(monkeypatch, ml, inputs, document):

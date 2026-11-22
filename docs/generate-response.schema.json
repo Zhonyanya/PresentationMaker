@@ -302,7 +302,8 @@
                 "enum": [
                   "lead",
                   "blocks",
-                  "steps"
+                  "steps",
+                  "tree"
                 ]
               }
             },

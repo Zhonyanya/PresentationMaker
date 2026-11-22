@@ -12,6 +12,7 @@ from app.presentations.pdf_source import (
     SourceFigure,
     SourcePage,
     _captioned_figure,
+    _column_breaks,
     _framed_figures,
     _page_illustrations,
     read_pdf,
@@ -42,13 +43,19 @@ def grid_pdf(
             "BT /F1 12 Tf 30 30 Td (Phone bookings were not measured.) Tj ET",
             "BT /F1 12 Tf 30 14 Td (- Walk-ins were still accepted.) Tj ET",
         ])
+    return positioned_pdf(commands, 300, top + (100 if add_prose else 40))
+
+
+def positioned_pdf(
+    commands: list[str], width: int, height: int, *, font_encoding: str = "",
+) -> BytesIO:
     drawing = "\n".join(commands).encode("ascii")
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 {top + (100 if add_prose else 40)}] ".encode()
+        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] ".encode()
         + b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        f"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica {font_encoding} >>".encode(),
         f"<< /Length {len(drawing)} >>\nstream\n".encode() + drawing + b"\nendstream",
     ]
     pdf = BytesIO(b"%PDF-1.4\n")
@@ -100,7 +107,71 @@ def test_pdf_source_keeps_paragraphs_and_tables_in_reading_order():
     assert all(block.page == 1 for block in parsed.blocks)
     assert len({block.id for block in parsed.blocks if isinstance(block, TextBlock)}) == 4
     text = source_text(parsed)
-    assert text.index("Cancelled sessions") < text.index("Second line") < text.index("Phone bookings")
+    assert text.index("Cancelled sessions") < text.index("Second line")
+    assert text.index("Second line") < text.index("Phone bookings")
+
+
+@pytest.mark.parametrize("remote_heading", ["Remote site", "USA"])
+def test_pdf_source_reads_parallel_prose_columns_independently(remote_heading):
+    commands = [
+        "BT /F1 20 Tf 36 280 Td (Methods and limitations across the two sites) Tj ET",
+    ]
+    for x, heading, details in [
+        (36, "Central site", [
+            "Keep the original records.", "Limit corrections to two days.",
+            "Use a separate note for exceptions.",
+        ]),
+        (316, remote_heading, [
+            "Save a digital copy first.", "Retain copies for one calendar year.",
+            "List the return date in the register.",
+        ]),
+    ]:
+        commands.append(f"BT /F1 16 Tf {x} 230 Td ({heading}) Tj ET")
+        for index, line in enumerate(details):
+            commands.append(f"BT /F1 12 Tf {x} {200 - 16 * index} Td ({line}) Tj ET")
+    commands.extend([
+        "BT /F1 16 Tf 36 128 Td (Limitations) Tj ET",
+        "BT /F1 12 Tf 36 100 Td "
+        "(The joint review covers both sites separately and assumes a complete reporting period.) "
+        "Tj ET",
+    ])
+    source = read_pdf_source(positioned_pdf(commands, 600, 320))
+    assert [block.text for block in source.blocks] == [
+        "Methods and limitations across the two sites",
+        "Central site",
+        "Keep the original records. Limit corrections to two days. "
+        "Use a separate note for exceptions.",
+        remote_heading,
+        "Save a digital copy first. Retain copies for one calendar year. "
+        "List the return date in the register.",
+        "Limitations",
+        "The joint review covers both sites separately and assumes a complete reporting period.",
+    ]
+
+
+def test_column_breaks_use_the_shared_gutter_instead_of_an_early_line_end():
+    gaps = [[(1, edge, 784)] for edge in (644, 663, 685, 727, 729, 731, 735)]
+    (gutter,) = _column_breaks(gaps)
+    assert 735 < gutter < 784
+
+
+def test_pdf_source_preserves_multichar_glyphs_when_splitting_a_line():
+    commands = []
+    for y, left, right in [
+        (260, r"of\336ce here", "Remote site"),
+        (240, "First report", "Paper totals"),
+        (220, "Second report", "Other totals"),
+    ]:
+        commands.extend([
+            f"BT /F1 12 Tf 36 {y} Td ({left}) Tj ET",
+            f"BT /F1 12 Tf 316 {y} Td ({right}) Tj ET",
+        ])
+    pdf = positioned_pdf(commands, 600, 320, font_encoding="/Encoding /MacRomanEncoding")
+    (page,) = read_pdf(pdf)
+    assert page.text.splitlines() == [
+        "office here", "First report", "Second report",
+        "Remote site", "Paper totals", "Other totals",
+    ]
 
 
 def test_dense_grid_uses_the_crop_fallback():

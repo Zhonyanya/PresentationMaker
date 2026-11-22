@@ -1,7 +1,9 @@
 """Format-independent source blocks for offline preparation of slide evidence."""
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
+from itertools import islice, zip_longest
 
 from app.presentations.source_blocks import (
     SOURCE_ADAPTER,
@@ -27,17 +29,69 @@ class Evidence:
 
 
 def text_blocks(text: str) -> SourceDocument:
-    paragraphs = (part.strip() for part in text.split('\n\n'))
+    paragraphs = (part.strip() for part in re.split(r'\r?\n[ \t]*\r?\n', text))
     return SourceDocument(tuple(
         TextBlock(f'text-{index}', part) for index, part in enumerate(paragraphs, 1) if part
     ))
 
 
+_REVIEW_HEADINGS = {
+    'observed': re.compile(
+        r'^(?:результаты(?:\s|$)|что не получилось$|findings$|results\b|what went wrong$)', re.I,
+    ),
+    'limitations': re.compile(
+        r'^(?:ограничения(?:\s|$)|границы вывода$|(?:study )?limitations\b)', re.I,
+    ),
+    'proposed': re.compile(
+        r'^(?:предложение по следующему этапу$|следующ(?:ий этап|ие шаги)(?:\s|$)|next steps\b)',
+        re.I,
+    ),
+}
+_REVIEW_LIST_MARKER = re.compile(r'^(?:[•—–-]|\d{1,3}[.)])\s+')
+
+
+def review_sections(source: SourceDocument) -> dict[str, list[str]]:
+    """Surface literal paragraphs from explicit report sections, in bounded groups."""
+    sections = defaultdict(list)
+    current = None
+    for block in source.blocks:
+        if not isinstance(block, TextBlock):
+            current = None
+            continue
+        paragraph = ' '.join(block.text.split())
+        if (len(paragraph) <= 90 and not paragraph.endswith(('.', '!', '?', ';'))
+                and '\n' not in block.text.strip()):
+            heading = _REVIEW_LIST_MARKER.sub('', paragraph.rstrip(':'))
+            role = next(
+                (key for key, rule in _REVIEW_HEADINGS.items() if rule.match(heading)), None,
+            )
+            if role:
+                current = []
+                sections[role].append(current)
+                continue
+            if not _REVIEW_LIST_MARKER.match(paragraph):
+                current = None
+                continue
+        if current is not None and 20 <= len(paragraph) <= 500:
+            current.append(paragraph)
+
+    excerpts = {}
+    for role, groups in sections.items():
+        # Interleave sections of the same kind so a long results section cannot
+        # crowd out later observations about how the pilot actually ran.
+        candidates = (paragraph for row in zip_longest(*groups)
+                      for paragraph in row if paragraph is not None)
+        chosen = list(islice(candidates, 6 if role == 'observed' else 4))
+        if chosen:
+            excerpts[role] = chosen
+    return excerpts
+
+
 def prepare_evidence(
-    source: SourceDocument, *, limit: int, relations: frozenset[str] | None = None,
+    source: SourceDocument, *, limit: int | None, relations: frozenset[str] | None = None,
 ) -> tuple[KnowledgeGraph, tuple[Evidence, ...]]:
     """Rank graph assertions with resolvable evidence, preferring named entities."""
-    if limit < 1:
+    if limit is not None and limit < 1:
         raise ValueError('Evidence limit must be positive')
     texts = [block for block in source.blocks if isinstance(block, TextBlock)]
     tables = [block for block in source.blocks if isinstance(block, TableBlock)]
@@ -82,7 +136,7 @@ def prepare_evidence(
 
 
 def build_source_payload(
-    source: SourceDocument, *, limit: int = 12, relations: frozenset[str] | None = None,
+    source: SourceDocument, *, limit: int | None = 12, relations: frozenset[str] | None = None,
 ) -> dict:
     """Build JSON-ready facts and their source addresses."""
     graph, evidence = prepare_evidence(source, limit=limit, relations=relations)

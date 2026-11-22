@@ -76,6 +76,10 @@ def build_generation_prompt(*, planned=False) -> str:
     templates = files('presentation_ml').joinpath('prompt_templates')
     rules = templates.joinpath('generation-wire-v1.txt').read_text(encoding='utf-8').strip()
     prompt = build_prompt('generate') + '\n\n' + rules
+    if get_prompt_version() == 'v4':
+        prompt += '\n\n' + templates.joinpath('v4-report-sections.txt').read_text(
+            encoding='utf-8',
+        ).strip()
     if planned:
         prompt += '\n\n' + templates.joinpath('deck-plan-wire-v1.txt').read_text(
             encoding='utf-8',

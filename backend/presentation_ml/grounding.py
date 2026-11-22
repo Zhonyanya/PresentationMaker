@@ -2,8 +2,97 @@
 
 import copy
 import re
+from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
+
+_CLAUSE_BOUNDARY = re.compile(r'([.!?;](?=\s|$)|\r?\n+)')
+_PERCENTAGE = re.compile(
+    r'(?<![\w+\-−.])(?P<value>\d{1,3}(?:[.,]\d+)?)\s*'
+    r'(?:%|процент(?:ами|ах|ов|а|е)?\b|percent\b)\s+'
+    r'(?:of\s+(?:the\s+)?)?(?P<base>[^\W\d_]{3,})\b',
+    re.IGNORECASE,
+)
+_SCOPE = re.compile(
+    r'(?:с|со|без|для|из|в|во|на|по|у|with|without|among|at|in|from|within)'
+    r'(?:\s+[^\W\d_]+(?:-[^\W\d_]+)?){1,5}',
+    re.IGNORECASE,
+)
+_CHANGE_MODIFIER = re.compile(r'\b(?:на|by)\s*$', re.IGNORECASE)
+_NEGATION = re.compile(r'\b(?:не|нет|not|never)\b', re.IGNORECASE)
+_CONTEXT_WORD = re.compile(r'\b(?:[А-ЯЁа-яё]{5,}|[A-Za-z]{5,})\b')
+_REPORT_CONTEXT = {'pilot', 'project', 'report', 'results', 'study', 'пилотн', 'проект', 'отчета'}
+
+
+def _percentage_key(match: re.Match[str]) -> tuple[str, str]:
+    # Canonical decimal spelling without losing precision to a float conversion.
+    whole, _, fraction = match['value'].replace(',', '.').partition('.')
+    decimal = fraction.rstrip('0')
+    value = str(int(whole)) + ('.' + decimal if decimal else '')
+    return value, match['base'].casefold()
+
+
+def _context_words(value: str) -> set[str]:
+    return {
+        word if word.isascii() else word[:6].replace('ё', 'е')
+        for word in _CONTEXT_WORD.findall(value.casefold())
+    }
+
+
+def restore_percentage_scopes(
+    document: dict, paragraphs: Iterable[tuple[str, str]], *,
+    cited_blocks: dict[str, set[str]] | None = None,
+) -> None:
+    """Restore an omitted short scope only when the number, base and context agree."""
+    evidence = defaultdict(list)
+    for block_id, paragraph in paragraphs:
+        for clause in _CLAUSE_BOUNDARY.split(paragraph):
+            for match in _PERCENTAGE.finditer(clause):
+                scope = ' '.join(clause[match.end():].split())
+                context = clause[:match.start()]
+                # Unqualified occurrences count for ambiguity too.
+                if not _SCOPE.fullmatch(scope) or _CHANGE_MODIFIER.search(context) \
+                        or _NEGATION.search(context):
+                    scope = ''
+                key = _percentage_key(match)
+                evidence[key].append((scope, _context_words(context), block_id))
+
+    def restore(value: str, maximum: int, allowed_blocks: set[str] | None) -> str:
+        clauses = _CLAUSE_BOUNDARY.split(value)
+        for index in range(0, len(clauses), 2):
+            clause = clauses[index]
+            matches = list(_PERCENTAGE.finditer(clause))
+            if len(matches) != 1:
+                continue
+            (match,) = matches
+            context = clause[:match.start()]
+            if (clause[match.end():].strip() or _CHANGE_MODIFIER.search(context)
+                    or _NEGATION.search(context)):
+                continue
+            candidates = evidence.get(_percentage_key(match), ())
+            scopes = {scope for scope, _, _ in candidates}
+            if len(scopes) != 1 or '' in scopes:
+                continue
+            (scope,) = scopes
+            words = _context_words(context)
+            if len(words - _REPORT_CONTEXT) >= 2 and any(
+                words <= source_words and (allowed_blocks is None or block_id in allowed_blocks)
+                for _, source_words, block_id in candidates
+            ):
+                clauses[index] = clause[:match.end()] + ' ' + scope + clause[match.end():]
+        result = ''.join(clauses)
+        return result if len(result.encode('utf-16-le')) // 2 <= maximum else value
+
+    if not evidence:
+        return
+    for slide in document['slides']:
+        allowed_blocks = cited_blocks.get(slide['id'], set()) if cited_blocks is not None else None
+        for field, maximum in (('body', 4000), ('subtitle', 400)):
+            if slide.get(field):
+                slide[field] = restore(slide[field], maximum, allowed_blocks)
+        for field in ('bullets', 'left', 'right'):
+            if slide.get(field):
+                slide[field] = [restore(item, 1000, allowed_blocks) for item in slide[field]]
 
 
 def attach_source_quotes(candidate, text, *, page_passages=None):
