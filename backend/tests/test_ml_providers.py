@@ -1,8 +1,54 @@
 """Provider boundary and prompt migration checks: no live requests."""
 
 import hashlib
+from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.mark.parametrize(("failure", "code"), [
+    ("timeout", "ML_PROVIDER_TIMEOUT"),
+    ("gateway", "ML_PROVIDER_TIMEOUT"),
+    ("server", "ML_PROVIDER_UNAVAILABLE"),
+    ("quota", "ML_PROVIDER_BUSY"),
+    ("length", "ML_PROVIDER_INCOMPLETE"),
+])
+def test_gigachat_reports_actionable_failure_without_exposing_the_response(
+    monkeypatch, failure, code,
+):
+    from gigachat import exceptions
+    import gigachat
+    import httpx
+
+    from app.core.errors import AppError
+    from presentation_ml.providers.gigachat import _request_document
+
+    class Client:
+        def __init__(self, **options):
+            assert options["max_retries"] == 0
+            assert options["verify_ssl_certs"] is True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def chat(self, _):
+            if failure == "timeout":
+                raise httpx.ReadTimeout("private context")
+            if failure != "length":
+                status = {"gateway": 504, "server": 500, "quota": 429}[failure]
+                raise exceptions.ResponseError("https://invalid.example", status, b"private body", None)
+            return SimpleNamespace(choices=[SimpleNamespace(finish_reason="length")])
+
+    monkeypatch.setattr(gigachat, "GigaChat", Client)
+    monkeypatch.setenv("GIGACHAT_CREDENTIALS", "test-only")
+    monkeypatch.setenv("GIGACHAT_MODEL", "GigaChat-3-Ultra")
+    with pytest.raises(AppError) as error:
+        _request_document(system="", payload={}, schema={}, timeout=5)
+    assert error.value.code == code
+    assert "private" not in error.value.message
 
 
 @pytest.mark.parametrize(('operation', 'digest'), [

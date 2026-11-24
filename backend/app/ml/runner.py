@@ -7,18 +7,13 @@ import signal
 import sys
 from datetime import UTC, datetime
 
+from pydantic import ValidationError
+
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.ml.adapter import get_adapter
+from app.ml.errors import PUBLIC_ERRORS, ProviderFailure
 from app.presentations.schemas import normalize_document, validate_revision
-
-PUBLIC_ERRORS = {
-    "ML_UNAVAILABLE": "ML-модуль недоступен.",
-    "ML_CAPABILITY_UNAVAILABLE": "ML не поддерживает эту операцию.",
-    "INVALID_ML_RESPONSE": "ML вернул документ неверного формата.",
-    "GENERATION_FAILED": "Ошибка выполнения ML.",
-    "NO_TABLE_COMPARISONS": "В таблицах нет распознанных сравнений по периодам.",
-}
 
 
 def main():
@@ -34,10 +29,12 @@ def main():
 
     signal.signal(signal.SIGALRM, expire)
     signal.setitimer(signal.ITIMER_REAL, remaining)
+    stage = "adapter"
     try:
         # ML stdout must not corrupt protocol or expose private content in application logs.
         with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink):
             result = get_adapter().invoke(request["kind"], request["inputs"])
+        stage = "document"
         document = normalize_document(
             result, generation=request["kind"] == "generate", max_bytes=get_settings().max_ml_bytes
         )
@@ -49,12 +46,21 @@ def main():
     except AppError as exc:
         code = exc.code if exc.code in PUBLIC_ERRORS else "GENERATION_FAILED"
         reply = {"error": {"code": code, "message": PUBLIC_ERRORS[code]}}
-    except (ValueError, TypeError, KeyError):
+        if isinstance(exc, ProviderFailure):
+            reply["diagnostic"] = exc.reason
+    except (ValueError, TypeError, KeyError) as exc:
+        if isinstance(exc, json.JSONDecodeError):
+            reason = "invalid_json"
+        elif isinstance(exc, ValidationError):
+            reason = "schema"
+        else:
+            reason = "invalid_value"
         reply = {
             "error": {
                 "code": "INVALID_ML_RESPONSE",
                 "message": "ML вернул документ неверного формата.",
-            }
+            },
+            "diagnostic": f"{stage}_{reason}",
         }
     except Exception:
         reply = {"error": {"code": "GENERATION_FAILED", "message": "Ошибка выполнения ML."}}

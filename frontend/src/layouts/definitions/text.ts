@@ -39,26 +39,46 @@ export const textLayout: LayoutDefinition<'text'> = {
       const context = isComparison ? comparisonContext(slide.body, material.rows) : lines(slide.body)
       const textSize = { max: 17, min: 13 }
       const textSpacing = { lineSpacing: 1, paragraphSpacing: 0 }
-      let contextHeight = 0
-      if (context.length) {
-        contextHeight = material.kind === 'image' ? (context.length > 1 ? 1 : 0.68)
-          : Math.min(box.h * 0.4, estimateTextHeight(context, box.w, textSize.max, textSpacing) / 0.96 + 0.16)
+      const chrome = contentChrome(slide.title || (material.page ? `Страница ${material.page}` : 'Материал доклада'), ctx)
+      const textStyle = {
+        fontFace: fonts.body, color: colors.text, align: 'left' as const,
+        valign: 'top' as const, ...textSpacing,
       }
+      if (material.kind === 'image' && context.length) {
+        const fullImage = sourceImageBox(material.png, box)
+        if (fullImage.w / fullImage.h <= 1.18) {
+          const imageWidth = Math.min(box.w * 0.44, Math.max(box.w * 0.32, fullImage.w))
+          const copy = fittedText({
+            field: 'body',
+            box: { ...box, w: box.w - imageWidth - ctx.theme.spacing.columnGap },
+            paragraphs: context,
+            size: typography.body,
+            style: { ...textStyle, lineSpacing: typography.lineSpacing, paragraphSpacing: typography.paragraphSpacing },
+          })
+          if (!copy.overflow) {
+            const frame = { ...box, x: box.x + box.w - imageWidth, w: imageWidth }
+            return {
+              background: colors.background,
+              elements: [...chrome, copy, { type: 'image', box: sourceImageBox(material.png, frame), src: material.png }],
+            }
+          }
+        }
+      }
+      const contextHeight = context.length
+        ? Math.min(box.h * 0.4, estimateTextHeight(context, box.w, textSize.max, textSpacing) / 0.96 + 0.16)
+        : 0
       const visualBox = { ...box, y: box.y + contextHeight, h: box.h - contextHeight }
       return {
         background: colors.background,
         elements: [
-          ...contentChrome(slide.title || (material.page ? `Страница ${material.page}` : 'Материал доклада'), ctx),
+          ...chrome,
           ...(context.length ? [fittedText({
             field: 'body',
             floor: material.kind === 'table' ? typography.absoluteMinFontSize : undefined,
             box: { ...box, h: contextHeight - 0.1 },
             paragraphs: context,
             size: textSize,
-            style: {
-              fontFace: fonts.body, color: colors.text, align: 'left',
-              valign: 'top', ...textSpacing,
-            },
+            style: textStyle,
           })] : []),
           material.kind === 'table'
             ? sourceTable(material.rows, visualBox, fonts.body, typography.absoluteMinFontSize,

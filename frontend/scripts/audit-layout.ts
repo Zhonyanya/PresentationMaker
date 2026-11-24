@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util'
 import { presentationSchema } from '@/domain/presentation'
 import { buildPptx } from '@/export/pptx-export'
 import { auditPresentation } from '@/layouts/layout-audit'
-import { presentationTheme } from '@/theme/presentation-theme'
+import { resolvePresentationTheme } from '@/theme/theme-presets'
 
 const args = parseArgs({
   options: { output: { type: 'string' }, 'pptx-dir': { type: 'string' } },
@@ -24,9 +24,9 @@ if (pptxDir) await mkdir(pptxDir, { recursive: true })
 const reports = []
 for (const [index, path] of args.positionals.entries()) {
   const document = presentationSchema.parse(JSON.parse(await readFile(path, 'utf8')))
-  reports.push({ file: basename(path), slides: auditPresentation(document.slides, presentationTheme) })
+  reports.push({ file: basename(path), slides: auditPresentation(document.slides, resolvePresentationTheme(document.themeId)) })
   if (pptxDir) {
-    const pptx = await buildPptx(document, { theme: presentationTheme })
+    const pptx = await buildPptx(document)
     const bytes = await pptx.write({ outputType: 'nodebuffer', compression: true }) as Buffer
     await writeFile(join(pptxDir, names[index] + '.pptx'), bytes)
   }

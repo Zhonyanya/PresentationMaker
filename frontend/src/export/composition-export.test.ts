@@ -431,18 +431,36 @@ it('нумерует действия отдельно от условий и с
   }
 })
 
-it('чередует расположение тезиса на соседних текстовых слайдах', () => {
+it('различает соседние текстовые слайды и сохраняет каждую формулировку в PPTX', async () => {
+  const lead = 'Главное условие.'
+  const details = 'Подробности указаны в заявке.'
+  const wideLead = 'Подтверждение согласия от получателя обычно оформляется отдельной записью в личном кабинете после направления запроса.'
   const document = presentationSchema.parse({
     title: 'Архив',
-    slides: ['Запись', 'Выдача', 'Адрес'].map((title) => ({
-      id: title, layout: 'text', title, body: 'Главное условие. Подробности указаны в заявке.',
+    slides: ['Запись', 'Выдача', 'Адрес', 'Согласие', 'Подтверждение'].map((title, index) => ({
+      id: title, layout: 'text', title, body: (index >= 3 ? wideLead : lead) + ' ' + details,
     })),
   })
-  const leadWidths = buildPresentationScenes(document.slides, presentationTheme).map(
-    (scene) => scene.elements.find((element) => element.type === 'text' && element.field === 'body')?.box.w ?? 0,
-  )
-  expect(leadWidths[0]).toBeGreaterThan(leadWidths[1])
-  expect(leadWidths[2]).toBe(leadWidths[0])
+  const scenes = buildPresentationScenes(document.slides, presentationTheme)
+  const bodyElements = scenes.map((scene) =>
+    scene.elements.flatMap((item) => item.type === 'text' && item.field === 'body' ? [item] : []))
+  const backgrounds = scenes.map((scene) =>
+    scene.elements.some((item) => item.type === 'rect' && item.fill === presentationTheme.colors.primary
+      && item.box.h > 1))
+  expect(backgrounds).toEqual([true, true, false, true, false])
+  expect(bodyElements[0][0].box.w).toBeGreaterThan(bodyElements[1][0].box.w)
+  expect(bodyElements[2][0].style.color).toBe(presentationTheme.colors.primary)
+  expect(bodyElements.flat().every((item) => !item.overflow)).toBe(true)
+
+  const pptx = await buildPptx(document)
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  for (const [index, parts] of bodyElements.entries()) {
+    const expected = [index >= 3 ? wideLead : lead, details]
+    expect(parts.flatMap((part) => part.paragraphs.map(({ text }) => text))).toEqual(expected)
+    const xml = await zip.file(`ppt/slides/slide${index + 1}.xml`)?.async('string') ?? ''
+    const text = [...xml.matchAll(/<a:t>(.*?)<\/a:t>/g)].map((match) => match[1])
+    expect(text.filter((value) => expected.includes(value))).toEqual(expected)
+  }
 })
 
 it('обновляет сцену редактора при смене макета предыдущего слайда', () => {
@@ -501,4 +519,50 @@ it('показывает общий заголовок дерева один р�
   const [scene] = buildPresentationScenes(document.slides, presentationTheme)
   const markup = renderToStaticMarkup(createElement(SlideRenderer, { scene, scale: 1 }))
   expect(markup.match(/Каналы доступа/g)).toHaveLength(1)
+})
+
+
+it('применяет выбранный шаблон УрФУ и к превью, и к обычному экспорту PPTX', async () => {
+  const deck = presentationSchema.parse({
+    title: 'Отчёт', themeId: 'urfu', slides: [
+      { id: 'cover', layout: 'title', title: 'Отчёт' },
+      { id: 'body', layout: 'text', title: 'Наблюдения', body: 'Сводка наблюдений за период.' },
+      { id: 'end', layout: 'closing', title: 'Результаты' },
+    ],
+  })
+  const preview = renderToStaticMarkup(createElement(function Preview() {
+    const scenes = usePresentationScenes(deck.slides, deck.themeId)
+    return createElement('div', null, ...scenes.map((scene, key) =>
+      createElement(SlideRenderer, { scene, key, scale: 1 })))
+  }))
+  expect(preview.match(/background-image:url/g)).toHaveLength(3)
+  const pptx = await buildPptx(deck)
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  for (const index of [1, 2, 3]) {
+    const xml = await zip.file(`ppt/slides/slide${index}.xml`)?.async('string') ?? ''
+    expect(xml).toMatch(/<p:bg>.*?<a:blipFill[ >]/s)
+  }
+  expect(await zip.file('ppt/slides/slide2.xml')?.async('string')).toContain('Сводка наблюдений за период.')
+})
+
+
+it('выделяет подписанные проценты и оставляет условия сравнения на слайде', async () => {
+  const description = 'The most common trip purposes in 2025 were'
+  const condition = 'These three have been the most popular purposes in each of the past five years.'
+  const deck = presentationSchema.parse({ title: 'Travel', slides: [{
+    id: 'reasons', layout: 'text', title: 'Why people travelled',
+    body: description + " shopping (17%), commuting (13%), and 'just walk' (9%). " + condition,
+  }] })
+  const [scene] = buildPresentationScenes(deck.slides, presentationTheme)
+  const texts = scene.elements.flatMap((element) =>
+    element.type === 'text' && element.field === 'body' ? [element] : [])
+  const metrics = texts.filter((element) => element.paragraphs.some(({ text }) => /^\d+%$/.test(text)))
+  expect(metrics.map((element) => element.paragraphs[0].text)).toEqual(['17%', '13%', '9%'])
+  expect(metrics.every((element) => element.style.fontSize >= 29 && !element.overflow)).toBe(true)
+  const pptx = await buildPptx(deck)
+  const zip = await JSZip.loadAsync(await pptx.write({outputType: 'nodebuffer'}) as Buffer)
+  const xml = await zip.file('ppt/slides/slide1.xml')?.async('string') ?? ''
+  for (const text of [description, 'shopping', 'commuting', 'just walk', '17%', '13%', '9%', condition]) {
+    expect(xml).toContain(text)
+  }
 })

@@ -97,6 +97,8 @@ function Workspace() {
   const [errorCanRefresh, setErrorCanRefresh] = useState(false)
   const draftText = useFlowStore((s) => s.draft.text)
   const [sourceAttachment, setSourceAttachment] = useState<SourceAttachment | null>(null)
+  const hasDraftSource = useRef(false)
+  hasDraftSource.current = Boolean(sourceAttachment || draftText.trim())
   const [draftVersion, setDraftVersion] = useState(0)
   // Документ, для которого пояснение о числе слайдов уже закрыто
   const [shortfallSeen, setShortfallSeen] = useState<string | null>(null)
@@ -113,7 +115,7 @@ function Workspace() {
   const userRef = useRef<ServerUser | null>(null)
   const submission = useRef<{ signature: string; key: string } | null>(null)
   const selected = useEditorStore(selectSelectedSlide)
-  const scenes = usePresentationScenes(current?.document?.slides ?? [])
+  const scenes = usePresentationScenes(current?.document?.slides ?? [], current?.document?.themeId)
 
   const clearPrivate = useCallback(() => {
     epoch.current++
@@ -262,7 +264,7 @@ function Workspace() {
           setInstruction('')
           setError(status.output_document_token !== value.document_token ? 'Документ уже обновлён другой задачей. Показан текущий результат, не архив.' : '')
         } else {
-          const failure = jobFailure(status.error, kind)
+          const failure = jobFailure(status.error, kind, hasDraftSource.current)
           setError(failure.message); setErrorCanRefresh(failure.canRefresh)
         }
       } catch (cause) {
@@ -495,6 +497,7 @@ function Workspace() {
       <CreatePage
         key={draftVersion}
         serverMode
+        defaultThemeId={document?.themeId}
         sourceAttachment={sourceAttachment}
         setSourceAttachment={setSourceAttachment}
         readPdfSource={api.readPdfSource}

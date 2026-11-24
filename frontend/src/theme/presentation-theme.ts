@@ -36,7 +36,10 @@ export interface ThemeLogo {
   srcOnDark?: string
 }
 
+export type ThemeId = 'urfu'
+
 export interface PresentationTheme {
+  artwork?: { cover: string; content: string; coverTextWidth: number }
   id: string
   name: string
   /** false — тема временная. Интерфейс покажет предупреждение. */

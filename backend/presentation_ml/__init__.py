@@ -5,16 +5,22 @@ import re
 from datetime import UTC, datetime
 from functools import cache
 
+from app.presentations.prose_tables import with_parallel_tables
 from app.presentations.schemas import Document, normalize_document, validate_revision
-from app.presentations.source_blocks import SOURCE_ADAPTER, TextBlock, source_text
+from app.presentations.source_blocks import SOURCE_ADAPTER, TableBlock, TextBlock, source_text
 
 from .capabilities import reject_explicit_structure_change
 from .deck_plan import (
     GeneratedDeck,
     apply_plan_compositions,
+    apply_referenced_charts,
+    apply_referenced_equations,
+    apply_referenced_figures,
+    apply_referenced_tables,
     complete_plan,
     merge_intents,
     plan_evidence,
+    source_visual_catalog,
     plan_schema,
     read_intents,
     render_planned_text,
@@ -28,6 +34,7 @@ PRESERVES_SLIDE_IDS = True
 SUPPORTS_SOURCE_DOCUMENT = True
 SOURCE_VISUAL_FIELDS = ('sourceMaterial', 'composition')
 SERVER_LAYOUT_FIELDS = (*SOURCE_VISUAL_FIELDS, 'textStyle')
+OPTIONAL_GENERATED_FIELDS = {'id', 'subtitle', 'caption', 'notes'}
 
 SOURCE_FACTS_INSTRUCTION = (
     '\n\nПоле source_facts содержит отдельные проверяемые подсказки к исходному тексту. '
@@ -49,6 +56,7 @@ def remaining_seconds(deadline):
 
 def _schema(revision=False, slide_count=None, grounded=False, slide_ids=None, frozen_title=None):
     schema = Document.model_json_schema()
+    schema['properties'].pop('themeId', None)
     definitions = schema.get('$defs', {})
     text_fields = definitions.get('TextSlide', {}).get('properties', {})
     for field in SERVER_LAYOUT_FIELDS:
@@ -113,7 +121,9 @@ def _schema(revision=False, slide_count=None, grounded=False, slide_ids=None, fr
 def _normalize(result, generation):
     if isinstance(result, dict) and isinstance(result.get('slides'), list):
         slides = [
-            {key: value for key, value in slide.items() if key not in SERVER_LAYOUT_FIELDS}
+            {key: value for key, value in slide.items()
+             if key not in SERVER_LAYOUT_FIELDS
+             and not (generation and value is None and key in OPTIONAL_GENERATED_FIELDS)}
             if isinstance(slide, dict) else slide
             for slide in result['slides']
         ]
@@ -217,6 +227,14 @@ def _promote_final_block(document, plans):
     return document
 
 
+def _grounded_visual_slide_ids(plans):
+    return {
+        slide_id for slide_id, intents in (plans or {}).items()
+        if any(intent.evidence and intent.visual_kind in {'table', 'chart', 'figure', 'equation', 'comparison', 'metric'}
+               for intent in intents)
+    }
+
+
 def _pack_short_generation(document, target_count, plans=None):
     """Combine short adjacent sections verbatim; never truncate or regenerate."""
     if len(document['slides']) <= target_count:
@@ -232,9 +250,20 @@ def _pack_short_generation(document, target_count, plans=None):
     if target_count == 3:
         groups = [(0, len(content))]
     else:
-        split = min(range(1, len(content)), key=lambda i: max(
-            len(merged_body(0, i)), len(merged_body(i, len(content))),
-        ))
+        visual_slides = _grounded_visual_slide_ids(plans)
+
+        def split_score(index):
+            groups = ((0, index), (index, len(content)))
+            bodies = [merged_body(start, end) for start, end in groups]
+            exceeds_budget = any(len(body.encode('utf-16-le')) // 2 > 800 for body in bodies)
+            merged_visuals = sum(
+                slide['id'] in visual_slides
+                for start, end in groups if end > start + 1
+                for slide in content[start:end]
+            )
+            return exceeds_budget, merged_visuals, max(map(len, bodies))
+
+        split = min(range(1, len(content)), key=split_score)
         groups = [(0, split), (split, len(content))]
     packed = []
     for start, end in groups:
@@ -262,11 +291,12 @@ def _fit_generation_budget(document, target_count, plans=None):
     if len(slides) <= target_count:
         return document
     content = slides[1:-1]
+    visual_slides = _grounded_visual_slide_ids(plans)
 
     @cache
     def group(start, stop):
         if stop == start + 1:
-            return content[start], 0
+            return content[start], (0, 0)
         parts = content[start:stop]
         body = '\n\n'.join(filter(None, (
             _slide_text(slide, include_title=index != 0) for index, slide in enumerate(parts)
@@ -279,12 +309,14 @@ def _fit_generation_budget(document, target_count, plans=None):
                   'title': parts[0]['title'], 'body': body}
         if notes:
             merged['notes'] = notes
-        return merged, body_length ** 2
+        # Keep grounded visuals on dedicated slides when a readable partition allows it.
+        merged_visuals = sum(slide['id'] in visual_slides for slide in parts)
+        return merged, (merged_visuals, body_length ** 2)
 
     @cache
     def partition(start, slots):
         if slots == 0:
-            return (0, ()) if start == len(content) else None
+            return ((0, 0), ()) if start == len(content) else None
         best = None
         for stop in range(start + 1, len(content) - slots + 2):
             candidate = group(start, stop)
@@ -294,7 +326,7 @@ def _fit_generation_budget(document, target_count, plans=None):
             tail = partition(stop, slots - 1)
             if tail is None:
                 continue
-            score = candidate[1] + tail[0]
+            score = tuple(a + b for a, b in zip(candidate[1], tail[0], strict=True))
             if best is None or score < best[0]:
                 best = score, ((start, stop), *tail[1])
         return best
@@ -400,6 +432,16 @@ def _generate(
         payload['source_passages'] = select_source_passages(text)
     if title is not None:
         payload["title"] = title
+    if version == 'v4':
+        # The website wraps pasted text in one unpaginated source block.
+        wrapped_text = (source is not None and len(source.blocks) == 1
+                        and isinstance(source.blocks[0], TextBlock) and source.blocks[0].page is None)
+        if source is None or wrapped_text:
+            parsed = text_blocks(text)
+            if any(isinstance(block, TableBlock) for block in parsed.blocks):
+                source = parsed
+        if source is not None:
+            source = with_parallel_tables(source)
     report = source or text_blocks(text)
     facts = build_source_payload(report)
     review = review_sections(report) if version == 'v4' else {}
@@ -416,6 +458,9 @@ def _generate(
         )
         payload['text'] = annotated_text
         payload['source_anchors'] = anchors
+        visuals = source_visual_catalog(source)
+        if visuals:
+            payload['source_visuals'] = visuals
         glossary = source_glossary(source)
         if glossary:
             payload['source_glossary'] = glossary
@@ -429,12 +474,30 @@ def _generate(
     remaining_seconds(deadline)
     if version == 'v7':
         result = attach_source_quotes(result, text, page_passages=page_passages)
+    intents = None
+    partial_plan = False
     if planned:
-        intents = read_intents(result, references, verbatim)
-        result = render_planned_text(result, intents, verbatim, source)
-    normalized = _normalize(result, True)
+        try:
+            try:
+                proposed = read_intents(result, references, verbatim)
+            except ValueError:
+                proposed = read_intents(result, references, verbatim, allow_partial=True)
+                if not any(intent.evidence and intent.visual_kind in {'table', 'chart', 'figure', 'equation'}
+                           for intent in proposed):
+                    raise
+                partial_plan = True
+            rendered = render_planned_text(result, proposed, verbatim, source)
+            normalized = _normalize(rendered, True)
+        except ValueError:
+            # The plan can fail independently of the provider's draft. Validate the
+            # original slides before publishing them without plan-based enrichment.
+            pass
+        else:
+            intents = proposed
+    if intents is None:
+        normalized = _normalize(result, True)
     plans = None
-    if planned:
+    if intents is not None:
         offset = int(result['slides'][0].get('layout') != 'title')
         draft_slides = normalized['slides'][offset:offset + len(intents)]
         plans = {
@@ -443,6 +506,7 @@ def _generate(
     if version == 'v4':
         restore_percentage_scopes(
             normalized, ((b.id, b.text) for b in report.blocks if isinstance(b, TextBlock)),
+            include_percentage_scopes=not planned or plans is not None,
             cited_blocks={
                 slide_id: {ref.block_id for intent in slide_plan for ref in intent.evidence}
                 for slide_id, slide_plan in plans.items()
@@ -473,10 +537,21 @@ def _generate(
     normalized['title'] = cover_title
     normalized['slides'][0]['title'] = cover_title
     document = _normalize(normalized, True)
-    if plans is None:
-        return GeneratedDeck(document)
-    plan = complete_plan(document, plans, recap_plans[recap['id']] if recap else None)
-    apply_plan_compositions(document, plan, facts['source_facts'], source)
+    plan = None
+    rendered_charts = set()
+    if plans is not None:
+        try:
+            plan = complete_plan(document, plans, recap_plans[recap['id']] if recap else None,
+                                 allow_partial=partial_plan)
+        except ValueError:
+            pass
+        if plan is not None:
+            rendered_charts = apply_plan_compositions(document, plan, facts['source_facts'], source)
+    if source is not None:
+        apply_referenced_tables(document, source)
+        apply_referenced_charts(document, source, rendered_charts)
+        apply_referenced_equations(document, source, plan)
+        apply_referenced_figures(document, source, plan)
     return GeneratedDeck(document, plan)
 
 
@@ -504,6 +579,10 @@ def revise(*, document, text, slideCount, instruction, target_slide_numbers,
         "target_slide_ids": list(frozen_targets) if scoped else None,
         "response_scope": 'selected_slides' if scoped else 'all_slides',
     }
+    for slide in payload['document']['slides']:
+        if slide.get('sourceMaterial', {}).get('kind') == 'image':
+            # Source images are restored locally after revision.
+            slide.pop('sourceMaterial')
     system = build_revision_prompt(scoped=scoped)
     revisions = (slide for slide in original['slides'] if slide['id'] in expected_ids)
     if any(any(key in slide for key in SOURCE_VISUAL_FIELDS) for slide in revisions):

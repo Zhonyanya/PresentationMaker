@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import AfterValidator, ConfigDict, Field, TypeAdapter
 
 MAX_SOURCE_TEXT = 120_000
+MAX_PAGINATED_SOURCE_TEXT = 240_000
 
 BlockID = Annotated[str, Field(strict=True, min_length=1, max_length=128)]
 SourceString = Annotated[str, Field(strict=True)]
@@ -37,6 +38,10 @@ class IllustrationBlock:
     locator: SourceString
     caption: SourceString = ''
     page: Page | None = None
+    png: Annotated[
+        str, Field(strict=True, max_length=120_000,
+                   pattern=r'^data:image/png;base64,iVBORw0KGgo[A-Za-z0-9+/]+={0,2}$'),
+    ] | None = None
     kind: Literal['illustration'] = 'illustration'
 
 
@@ -71,8 +76,12 @@ def validate_source(source: SourceDocument) -> SourceDocument:
     if len(ids) != len(source.blocks) or any(not identifier.strip() for identifier in ids):
         raise ValueError('Source block identifiers must be unique and nonblank')
     content = source_text(source)
-    if not content or len(content.encode('utf-16-le')) // 2 > MAX_SOURCE_TEXT:
+    limit = MAX_PAGINATED_SOURCE_TEXT if all(block.page is not None for block in source.blocks) else MAX_SOURCE_TEXT
+    if not content or len(content.encode('utf-16-le')) // 2 > limit:
         raise ValueError('Source content is empty or too long')
+    if sum(len(block.png or '') for block in source.blocks
+           if isinstance(block, IllustrationBlock)) > 512_000:
+        raise ValueError('Embedded source images exceed the source limit')
     fields = [*ids, content]
     for block in source.blocks:
         if isinstance(block, IllustrationBlock):

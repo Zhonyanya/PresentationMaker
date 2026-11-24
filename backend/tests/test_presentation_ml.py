@@ -6,6 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.core.errors import AppError
+
 
 @pytest.fixture
 def ml():
@@ -406,13 +408,13 @@ def test_sdk_transport_disables_retries_and_validates_payload(monkeypatch, docum
     assert options["max_retries"] == 0
 
 
-@pytest.mark.parametrize(("reason", "content", "error"), [
-    ("length", "{}", RuntimeError),
-    ("blacklist", "{}", RuntimeError),
-    ("stop", "not JSON", ValueError),
-    pytest.param("stop", "x" * 8_000_001, ValueError, id="oversize-response"),
+@pytest.mark.parametrize(("reason", "content", "error", "code"), [
+    ("length", "{}", AppError, "ML_PROVIDER_INCOMPLETE"),
+    ("blacklist", "{}", AppError, "ML_PROVIDER_REJECTED"),
+    ("stop", "not JSON", ValueError, None),
+    pytest.param("stop", "x" * 8_000_001, ValueError, None, id="oversize-response"),
 ])
-def test_transport_rejects_incomplete_or_invalid_output(monkeypatch, reason, content, error):
+def test_transport_rejects_incomplete_or_invalid_output(monkeypatch, reason, content, error, code):
     from types import SimpleNamespace
     from unittest.mock import MagicMock
 
@@ -427,8 +429,10 @@ def test_transport_rejects_incomplete_or_invalid_output(monkeypatch, reason, con
     monkeypatch.setattr(gigachat, "GigaChat", lambda **_: client)
     monkeypatch.setenv("GIGACHAT_CREDENTIALS", "synthetic-test-key")
     monkeypatch.setenv("GIGACHAT_MODEL", "test-model")
-    with pytest.raises(error):
+    with pytest.raises(error) as caught:
         request_document(system="test", payload={}, schema={}, timeout=60)
+    if code is not None:
+        assert caught.value.code == code
     assert client.chat.call_count == 1
 
 def test_revision_schema_fixes_snapshot_slide_count(monkeypatch, ml, inputs, document):
@@ -733,6 +737,454 @@ def test_generation_restores_percentage_scope_from_a_cited_source_block(monkeypa
         'Completed training — 30.5% of sites with night shifts.',
     ]
     assert deck.plan.slides[1].intents[0].evidence[0].block_id == 'sample'
+
+
+@pytest.mark.parametrize('plan_problem', ['missing_intent', 'unknown_evidence', 'blank_evidence'])
+def test_structured_generation_keeps_valid_slides_when_the_plan_is_invalid(
+    monkeypatch, ml, inputs, plan_problem,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    intent = {'goal': 'Show the pilot', 'takeaway': 'Measured results', 'visual_intent': 'Read',
+              'evidence_ids': ['block-1']}
+    source = {'blocks': [{
+        'id': 'text-1', 'kind': 'text', 'text': 'Пилот: выдано 50 комплектов в одном корпусе.',
+    }]}
+    result = {'title': 'Пилот', 'slides': [
+        {'layout': 'title', 'title': 'Пилот'},
+        {'layout': 'text', 'title': 'Результат', 'body': source['blocks'][0]['text']},
+        {'layout': 'closing', 'title': 'Итоги', 'subtitle': 'Пилот прошёл в одном корпусе.'},
+    ]}
+    result['plan'] = [copy.deepcopy(intent) for _ in result['slides']]
+    if plan_problem == 'missing_intent':
+        result['plan'].pop()
+    else:
+        result['plan'][1]['evidence_ids'] = ['missing-block'] if plan_problem == 'unknown_evidence' else []
+    calls = provider(monkeypatch, ml, result)
+
+    deck = ml._generate(**inputs, source=source)
+
+    assert deck.plan is None
+    assert [{key: value for key, value in slide.items() if key != 'id'}
+            for slide in deck.document['slides']] == result['slides']
+    assert len(calls) == 1
+
+
+def test_bad_evidence_on_one_slide_does_not_discard_a_verified_table(monkeypatch, ml, inputs):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    rows = [['Region', 'Output, MWh'], ['North', '41'], ['South', '27']]
+    source = {'blocks': [{'id': 'table-id', 'kind': 'table', 'rows': rows, 'page': 2}]}
+    draft = {'title': 'Output', 'slides': [
+        {'layout': 'title', 'title': 'Output'},
+        {'layout': 'text', 'title': 'Context', 'body': 'Measured during the pilot.'},
+        {'layout': 'text', 'title': 'Comparison', 'body': 'Results by region.'},
+        {'layout': 'closing', 'title': 'Summary', 'subtitle': 'Two regions.'},
+    ], 'plan': [
+        {'evidence_ids': [], 'visual_kind': 'text'},
+        {'evidence_ids': ['unknown'], 'visual_kind': 'chart'},
+        {'evidence_ids': ['block-1'], 'visual_kind': 'table'},
+        {'evidence_ids': [], 'visual_kind': 'text'},
+    ]}
+    calls = provider(monkeypatch, ml, draft)
+    slides = ml.generate(**inputs, source=source)['slides']
+    assert slides[1]['body'] == 'Measured during the pilot.'
+    assert 'composition' not in slides[1]
+    assert slides[2]['sourceMaterial'] == {'kind': 'table', 'rows': rows, 'page': 2}
+    assert len(calls) == 1
+
+
+def test_joined_heading_preserves_its_content_slide_table(monkeypatch, ml, inputs):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    rows = [['Region', 'Output, MWh'], ['North', '41'], ['South', '27']]
+    source = {'blocks': [{'id': 'table-id', 'kind': 'table', 'rows': rows}]}
+    draft = {'title': 'Output', 'slides': [
+        {'layout': 'title', 'title': 'Output'},
+        {'layout': 'section', 'title': 'Regional results'},
+        {'layout': 'text', 'title': '', 'body': 'Measured output.'},
+        {'layout': 'closing', 'title': 'Summary', 'subtitle': 'Two regions.'},
+    ], 'plan': [
+        {'evidence_ids': [], 'visual_kind': 'text'},
+        {'evidence_ids': [], 'visual_kind': 'text'},
+        {'evidence_ids': ['block-1'], 'visual_kind': 'table'},
+        {'evidence_ids': ['block-1'], 'visual_kind': 'text'},
+    ]}
+    provider(monkeypatch, ml, draft)
+    slide = ml.generate(**inputs, source=source)['slides'][1]
+    assert slide['title'] == 'Regional results'
+    assert slide['sourceMaterial']['rows'] == rows
+
+
+def test_generation_omits_null_optional_fields_without_rewriting_visible_content(
+    monkeypatch, ml, inputs,
+):
+    candidate = {'title': 'Пилот', 'slides': [
+        {'layout': 'title', 'title': 'Пилот', 'subtitle': None, 'caption': None},
+        {'layout': 'text', 'title': 'Результат', 'body': 'Результат получен в пилоте.', 'notes': None},
+        {'layout': 'closing', 'title': 'Итоги', 'subtitle': 'Пилот завершён.'},
+    ]}
+    provider(monkeypatch, ml, candidate)
+    slides = ml.generate(**inputs)['slides']
+    assert 'subtitle' not in slides[0] and 'caption' not in slides[0]
+    assert slides[1]['body'] == candidate['slides'][1]['body']
+    assert 'notes' not in slides[1]
+    assert slides[2]['subtitle'] == candidate['slides'][2]['subtitle']
+
+
+@pytest.mark.parametrize('page', [4, None])
+@pytest.mark.parametrize('table_case', ['exact', 'ambiguous', 'incomplete', 'too_wide'])
+def test_generation_places_a_cited_source_table_as_native_cells(
+    monkeypatch, ml, inputs, page, table_case,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    rows = [['Сценарий', 'Вт·ч на изображение', 'МВт·ч в день'],
+            ['Базовый', '1,35', '135'], ['Новый', '0,563', '56']]
+    table = {'id': 'input-table', 'kind': 'table', 'page': page, 'rows': copy.deepcopy(rows)}
+    source = {'blocks': [table]}
+    ids = ['block-1']
+    if table_case == 'ambiguous':
+        source['blocks'].append(dict(table, id='another-table'))
+        ids.append('block-2')
+    elif table_case == 'incomplete':
+        table['rows'][1][1] = None
+    elif table_case == 'too_wide':
+        table['rows'] = [row * 3 for row in rows]
+    body = 'При фиксированном объёме меняется дневное потребление.'
+    candidate = {'title': 'Энергопотребление', 'slides': [
+        {'layout': 'text', 'title': 'Сценарии', 'body': body},
+    ], 'plan': [{
+        'goal': 'Сопоставить сценарии', 'takeaway': body,
+        'visual_intent': 'Показать исходные значения',
+        'visual_kind': 'table', 'evidence_ids': ids,
+    }]}
+    calls = provider(monkeypatch, ml, candidate)
+    slides = ml.generate(**inputs, source=source)['slides']
+
+    assert slides[1]['body'] == body
+    assert len(calls) == 1
+    if table_case == 'exact':
+        expected = {'kind': 'table', 'rows': rows}
+        if page is not None:
+            expected['page'] = page
+        assert slides[1]['sourceMaterial'] == expected
+    else:
+        assert 'sourceMaterial' not in slides[1]
+
+
+@pytest.mark.parametrize('invalid', [None, 'column', 'missing_cell', 'row', 'missing_label', 'other_label_column'])
+def test_planned_large_table_uses_addressed_rows_and_columns_with_source_headers(
+    monkeypatch, ml, inputs, invalid,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    rows = [['Сценарий', 'Период', 'Энергия, кВт·ч на 1000 изображений',
+             *[f'Метрика {i}' for i in range(4, 11)]],
+            *[[f'Режим {i}', '2024', f'{i},05', *['—'] * 7] for i in range(1, 13)]]
+    selection = {'header_rows': 1, 'rows': [3, 12], 'columns': [1, 3]}
+    if invalid == 'column':
+        selection['columns'] = [1, 11]
+    elif invalid == 'missing_cell':
+        rows[2][2] = None
+    elif invalid == 'row':
+        selection['rows'] = [1, 12]
+    elif invalid == 'missing_label':
+        selection['columns'] = [2, 3]
+    elif invalid == 'other_label_column':
+        rows = [[row[1], row[0], *row[2:]] for row in rows]
+        selection.update(columns=[2, 3], label_column=2)
+    source = {'blocks': [{'id': 'table-large', 'kind': 'table', 'page': 7,
+                          'number': '4', 'rows': rows}]}
+    result = {'title': 'Энергопотребление', 'slides': [
+        {'layout': 'text', 'title': 'Сравнение двух режимов',
+         'body': 'Сопоставлены режимы при одном объёме.'},
+    ], 'plan': [{'evidence_ids': ['block-1'], 'visual_kind': 'table',
+                 'table_selection': selection}]}
+    calls = provider(monkeypatch, ml, result)
+
+    slide = ml.generate(**inputs, source=source)['slides'][1]
+
+    if invalid in (None, 'other_label_column'):
+        header = rows[0][selection['columns'][0]-1]
+        assert slide['sourceMaterial'] == {
+            'kind': 'table', 'page': 7, 'rows': [[header, rows[0][2]],
+                                                 ['Режим 2', '2,05'], ['Режим 11', '11,05']],
+        }
+        packet = calls[0]['payload']
+        assert packet['source_visuals'][0]['dimensions'] == {'rows': 13, 'columns': 10}
+        assert 'row 12:' in packet['text']
+    else:
+        assert 'sourceMaterial' not in slide
+    assert slide['body'] == result['slides'][0]['body']
+
+
+def test_generation_can_render_a_table_from_a_regular_text_source(monkeypatch, ml, inputs):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    source = {'blocks': [
+        {'id': 'energy', 'kind': 'text',
+         'text': 'Breakdown by district: North – 2,100.5 MWh (industrial users – 51%), '
+                 'and South – 2,221 MWh (industrial users – 55%).'},
+    ]}
+    result = {'title': 'Electricity', 'slides': [
+        {'layout': 'text', 'title': 'Differences between districts', 'body': 'Two districts reported usage.'},
+    ], 'plan': [{'evidence_ids': ['block-2'], 'visual_kind': 'table'}]}
+    provider(monkeypatch, ml, result)
+
+    slide = ml.generate(**inputs, source=source)['slides'][1]
+
+    assert slide['sourceMaterial']['rows'] == [
+        ['Group', 'Value, MWh', 'Share (industrial users)'],
+        ['North', '2,100.5', '51%'],
+        ['South', '2,221', '55%'],
+    ]
+
+
+@pytest.mark.parametrize('reused_number', [False, True])
+def test_generation_restores_explicitly_referenced_table_even_without_a_plan(
+    monkeypatch, ml, inputs, reused_number,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    rows = [['Сценарий', 'МВт·ч в день'], ['Базовый', '135'], ['Новый', '56']]
+    table = {'id': 'input-table', 'kind': 'table', 'page': 4, 'number': '6', 'rows': rows}
+    source = {'blocks': [table]}
+    if reused_number:
+        source['blocks'].append(dict(table, id='other-table', page=8))
+    result = {'title': 'Энергопотребление', 'slides': [
+        {'layout': 'text', 'title': 'Сценарии', 'body': 'Мощность по сценариям показана в таблице 6.'},
+        {'layout': 'text', 'title': 'Условия', 'body': 'Повтор вычислений по табл. №6.'},
+    ]}
+    provider(monkeypatch, ml, result)
+
+    deck = ml._generate(**inputs, source=source)
+    materials = [slide['sourceMaterial'] for slide in deck.document['slides'] if 'sourceMaterial' in slide]
+    assert materials == ([] if reused_number else [{'kind': 'table', 'page': 4, 'rows': rows}])
+
+
+def test_visual_reference_renders_chart_with_printed_values_for_both_named_periods(
+    monkeypatch, ml, inputs,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    source = {'blocks': [{
+        'id': 'pdf-chart-one', 'kind': 'table', 'page': 4,
+        'caption': 'Рисунок 2.1.7а – Доля обучающихся, %',
+        'rows': [['Категория', 'Доля', None, None], [None, '2022', '2023', '2024'],
+                 ['Группа А', '40,2%', '48,9%', '51,5%'],
+                 ['Группа Б', '43,1%', '47,3%', '53,9%']],
+    }]}
+    result = {'title': 'Обучение', 'slides': [
+        {'layout': 'text', 'title': 'Доля в 2023 и 2024 годах',
+         'body': 'Динамика по группам, рис. 2.1.7а.'},
+    ]}
+    provider(monkeypatch, ml, result)
+
+    chart = ml.generate(**inputs, source=source)['slides'][1]['composition']
+
+    assert chart == {
+        'kind': 'comparison', 'categories': ['Группа А', 'Группа Б'], 'unit': '%',
+        'series': [{'label': '2023', 'values': [48.9, 47.3]},
+                   {'label': '2024', 'values': [51.5, 53.9]}],
+    }
+
+
+def test_generation_offers_addressable_pdf_chart_and_uses_plan_block_without_prose_reference(
+    monkeypatch, ml, inputs,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    caption = 'Рисунок 2.1.7а – Доля заявок, %'
+    source = {'blocks': [
+        {'id': 'summary', 'kind': 'text', 'page': 4, 'text': 'Обращения разделили на две группы.'},
+        {'id': 'pdf-chart', 'kind': 'table', 'page': 4, 'caption': caption,
+         'rows': [['Категория', 'Доля', None], [None, '2023', '2024'],
+                  ['Группа А', '48,9%', '51,5%'], ['Группа Б', '47,3%', '53,9%']]},
+    ]}
+    result = {'title': 'Обращения', 'slides': [
+        {'layout': 'text', 'title': 'Динамика обращений',
+         'body': 'Доля выросла в обеих группах.'},
+        {'layout': 'text', 'title': 'Методика', 'body': 'Группы показаны на рис. 2.1.7а.'},
+    ], 'plan': [{'visual_kind': 'chart', 'evidence_ids': ['block-2']},
+                {'visual_kind': 'text', 'evidence_ids': ['block-1']}]}
+    calls = provider(monkeypatch, ml, result)
+
+    slides = ml.generate(**inputs, source=source)['slides']
+
+    assert calls[0]['payload']['source_visuals'] == [
+        {'id': 'block-2', 'kind': 'chart', 'page': 4, 'caption': caption},
+    ]
+    assert slides[1]['composition']['series'] == [
+        {'label': '2023', 'values': [48.9, 47.3]}, {'label': '2024', 'values': [51.5, 53.9]},
+    ]
+    assert 'composition' not in slides[2]
+
+
+@pytest.mark.parametrize('variant', ['exact', 'duplicate', 'unit', 'year', 'one_value'])
+def test_vector_chart_matches_published_numbers_when_draft_omits_figure_reference(
+    monkeypatch, ml, inputs, variant,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    first = {
+        'id': 'pdf-chart-one', 'kind': 'table', 'page': 4,
+        'caption': 'Рисунок 2.1.1 – Доля заявок, %',
+        'rows': [['Категория', 'Доля', None, None], [None, '2022', '2023', '2024'],
+                 ['Группа А', '40,2%', '48,9%', '51,5%'],
+                 ['Группа Б', '43,1%', '47,3%', '53,9%'],
+                 ['Группа В', '46,4%', '52,7%', '55,8%']],
+    }
+    source = {'blocks': [first]}
+    title = 'Доли в 2023 и 2024 годах'
+    body = 'Группа А показала рост доли с 48,9 % до 51,5%.'
+    if variant == 'duplicate':
+        source['blocks'].append(dict(first, id='pdf-chart-two', page=5,
+                                     caption='Рисунок 2.1.2 – Доля обращений, %'))
+    elif variant == 'unit':
+        body = 'В группе А обработали от 48,9 до 51,5 тысячи заявок.'
+    elif variant == 'year':
+        title = 'Изменения в 2024 году'
+    elif variant == 'one_value':
+        body = 'Для группы А опубликовано значение 51,5%.'
+    result = {'title': 'Обращения', 'slides': [
+        {'layout': 'text', 'title': title, 'body': body},
+        {'layout': 'text', 'title': 'Сводка', 'body': body, 'notes': 'Периоды 2023 и 2024.'},
+    ]}
+    provider(monkeypatch, ml, result)
+
+    slides = ml.generate(**inputs, source=source)['slides']
+    assert slides[1]['body'] == body
+    if variant == 'exact':
+        assert slides[1]['composition'] == {
+            'kind': 'comparison', 'categories': ['Группа А', 'Группа Б', 'Группа В'], 'unit': '%',
+            'series': [{'label': '2023', 'values': [48.9, 47.3, 52.7]},
+                       {'label': '2024', 'values': [51.5, 53.9, 55.8]}],
+        }
+    else:
+        assert 'composition' not in slides[1]
+    assert 'composition' not in slides[2]
+
+
+@pytest.mark.parametrize("plan", [True, False])
+def test_indexed_source_figure_import_reuses_pixels_and_ignores_ambiguous_catalog_code(
+    monkeypatch, ml, inputs, plan,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    png = ('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC'
+           'AAAAC0lEQVR42mP8/x8AAusB9Wl2Rx8AAAAASUVORK5CYII=')
+    source = {'blocks': [
+        {'id':'one', 'kind':'illustration', 'page':1,
+         'locator':'30,90,200,220', 'caption':'Average trips [STAT0101]', 'png':png},
+        {'id':'two', 'kind':'illustration', 'page':2,
+         'locator':'30,90,200,220', 'caption':'Average miles [STAT0101]', 'png':png},
+    ]}
+    result = {'title':'Survey', 'slides':[
+        {'layout':'text', 'title':'Average trips by year', 'body':'Trips dropped in 2025.'},
+        {'layout':'text', 'title':'Comparison', 'body':'Two measures are reported in STAT0101.'},
+    ]}
+    if plan:
+        result['plan'] = [{'evidence_ids':['block-1'], 'visual_kind':'figure'},
+                          {'evidence_ids':['block-1', 'block-2'], 'visual_kind':'figure'}]
+    calls = provider(monkeypatch, ml, result)
+    deck = ml.generate(**inputs, source=source)
+
+    assert deck['slides'][1]['sourceMaterial'] == {'kind':'image', 'page':1, 'png':png}
+    assert 'sourceMaterial' not in deck['slides'][2]
+    assert png not in repr(calls[0]['payload'])
+    assert [visual['kind'] for visual in calls[0]['payload']['source_visuals']] == ['figure', 'figure']
+
+
+def test_figure_selection_can_use_two_ratios_from_adjacent_source_prose(monkeypatch, ml, inputs):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    png = ('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC'
+           'AAAAC0lEQVR42mP8/x8AAusB9Wl2Rx8AAAAASUVORK5CYII=')
+    source = {'blocks': [
+        {'id':'method', 'kind':'text', 'page':2, 'text':'84% responded, up from 82%.'},
+        {'id':'described', 'kind':'text', 'page':2,
+         'text':'Walking made up 47% of school journeys in 2025, down from 51% in 2024.'},
+        {'id':'figure', 'kind':'illustration', 'page':2, 'locator':'30,90,200,220',
+         'caption':'Trips to and from school by main mode and age [STAT0613]', 'png':png},
+    ]}
+    result = {'title':'Survey', 'slides':[
+        {'layout':'text', 'title':'School response rate', 'body':'84% responded, up from 82%.'},
+        {'layout':'text', 'title':'Children’s school travel', 'body':'Walking accounted for 47% in 2025 and 51% in 2024.'},
+        {'layout':'text', 'title':'Survey participation', 'body':'47% in 2025 and 51% in 2024.'},
+    ]}
+    provider(monkeypatch, ml, result)
+    slides = ml.generate(**inputs, source=source)['slides']
+    assert slides[2]['sourceMaterial'] == {'kind':'image', 'page':2, 'png':png}
+    assert 'sourceMaterial' not in slides[1]
+    assert 'sourceMaterial' not in slides[3]
+
+
+@pytest.mark.parametrize('body, attached', [
+    ('В сценарии S1 рост составил около 4,2 раза.', True),
+    ('Рост составил около 4,2 раза.', False),
+    ('В сценарии S1 рост составил около 14,2 раза.', False),
+])
+def test_equation_fallback_requires_result_and_variable(body, attached):
+    from app.presentations.source_blocks import SOURCE_ADAPTER
+    from presentation_ml.deck_plan import apply_referenced_equations
+
+    png = ('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC'
+           'AAAAC0lEQVR42mP8/x8AAusB9Wl2Rx8AAAAASUVORK5CYII=')
+    source = SOURCE_ADAPTER.validate_python({'blocks': [
+        {'id': 'equation', 'kind': 'illustration', 'page': 4,
+         'locator': '20,60,400,70', 'caption': 'Формула (16)', 'png': png},
+        {'id': 'line', 'kind': 'text', 'page': 4, 'text': 'E(S1) ≈ 4,2 (16)'},
+    ]})
+    slide = {'id': 'x', 'layout': 'text', 'title': 'Результат', 'body': body}
+    apply_referenced_equations({'slides': [slide]}, source)
+    assert ('sourceMaterial' in slide) == attached
+
+
+@pytest.mark.parametrize("planned", [False, True])
+def test_numbered_formula_uses_the_source_image_without_sending_it_to_the_model(
+    monkeypatch, ml, inputs, planned,
+):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    png = ('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC'
+           'AAAAC0lEQVR42mP8/x8AAusB9Wl2Rx8AAAAASUVORK5CYII=')
+    source = {'blocks': [{'id': 'eq', 'kind': 'illustration', 'page': 4,
+                          'locator': '100,200,300,220', 'caption': 'Формула (16)', 'png': png}]}
+    result = {'title': 'Энергопотребление', 'slides': [
+        {'layout': 'text', 'title': 'Отскок спроса',
+         'body': 'Рост объёма учтён в формуле (16).'},
+    ]}
+    if planned:
+        result['slides'][0]['body'] = 'В расчёте учитывается рост объёма.'
+        result['plan'] = [{'evidence_ids':['block-1'], 'visual_kind':'equation'}]
+    calls = provider(monkeypatch, ml, result)
+
+    deck = ml.generate(**inputs, source=source)
+
+    assert deck['slides'][1]['sourceMaterial'] == {'kind': 'image', 'page': 4, 'png': png}
+    assert png not in repr(calls[0]['payload'])
+
+    calls = provider(monkeypatch, ml, deck)
+    revised = ml.revise(**inputs, document=deck, source=source, instruction='Проверь заголовок',
+                        target_slide_numbers=[2], target_slide_ids=[deck['slides'][1]['id']])
+    assert revised['slides'][1]['sourceMaterial'] == deck['slides'][1]['sourceMaterial']
+    assert png not in repr(calls[0]['payload'])
+
+
+@pytest.mark.parametrize('ambiguous', [False, True])
+def test_generation_restores_unambiguous_prefix_without_changing_denominator(monkeypatch, ml, inputs, ambiguous):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    source = 'Медиана составила 1,35 кВт·ч на 1000 изображений.'
+    draft = source.replace('кВт·ч', 'Вт·ч')
+    blocks = [{'id': 'original', 'kind': 'text', 'text': source}]
+    if ambiguous:
+        blocks.append({'id': 'second', 'kind': 'text', 'text': draft})
+    provider(monkeypatch, ml, {'title': 'Энергия', 'slides': [
+        {'layout': 'text', 'title': 'Медиана', 'body': draft},
+    ]})
+    slide = ml.generate(**inputs, source={'blocks': blocks})['slides'][1]
+    assert slide['body'] == (draft if ambiguous else source)
+
+
+def test_rate_unit_prefix_survives_pdf_line_breaks_and_slash_notation():
+    from presentation_ml.grounding import restore_percentage_scopes
+
+    paragraphs = [('a', 'На установке медиана 1,35 кВт·ч на 1000'),
+                  ('b', 'изображений и среднее значение выше.')]
+    slide = {'id': 'check', 'body': 'Медиана 1,35 Вт·ч/1000 изображений.'}
+    restore_percentage_scopes({'slides': [slide]}, paragraphs)
+    assert slide['body'] == 'Медиана 1,35 кВт·ч/1000 изображений.'
+    slide['body'] = 'Медиана 1,35 Вт·ч/100 изображений.'
+    restore_percentage_scopes({'slides': [slide]}, paragraphs)
+    assert slide['body'] == 'Медиана 1,35 Вт·ч/100 изображений.'
 
 
 def test_percentage_scope_keeps_different_actions_separate(monkeypatch, ml, inputs):

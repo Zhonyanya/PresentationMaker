@@ -7,6 +7,7 @@ import {
   serverGenerateRequestSchema, sourceDocumentSchema, SOURCE_TEXT_MAX,
   type ServerGenerateRequest, type SourceAttachment, type SourceDocument,
 } from '@/domain/source-document'
+import type { ThemeId } from '@/theme/presentation-theme'
 import { demoExamples, type DemoExample } from '@/data/demo-examples'
 import { useFlowStore } from '@/store/flow-store'
 import { useEditorStore } from '@/store/editor-store'
@@ -71,9 +72,10 @@ function SectionLabel({ number, title, aside }: { number: string; title: string;
 
 export function CreatePage({
   onGenerate, onOpenCurrent, onDiscardCurrent, serverMode = false, headerSlot, notice,
-  startAtWorkspace = false, sourceAttachment, setSourceAttachment, readPdfSource,
+  startAtWorkspace = false, sourceAttachment, setSourceAttachment, readPdfSource, defaultThemeId,
 }: {
   onGenerate?: (request: ServerGenerateRequest) => void
+  defaultThemeId?: ThemeId
   sourceAttachment?: SourceAttachment | null
   setSourceAttachment?: (attachment: SourceAttachment | null) => void
   readPdfSource?: (file: File, signal: AbortSignal) => Promise<SourceDocument>
@@ -89,6 +91,8 @@ export function CreatePage({
   startAtWorkspace?: boolean
 } = {}) {
   const titleId = useId()
+  const themeIdInput = useId()
+  const [themeId, setThemeId] = useState(defaultThemeId)
   const textId = useId()
   const workspaceRef = useRef<HTMLDivElement>(null)
   const examplesRef = useRef<HTMLDivElement>(null)
@@ -157,7 +161,7 @@ export function CreatePage({
       ? { blocks: [{ id: 'text-1', kind: 'text' as const, text }] }
       : undefined)
     const result = source ? serverGenerateRequestSchema.safeParse({
-      ...settings, source, mode: sourceAttachment?.compare ? 'comparisons' : undefined,
+      ...settings, source, themeId, mode: sourceAttachment?.compare ? 'comparisons' : undefined,
     }) : generateRequestSchema.safeParse({ ...settings, text })
     if (!result.success) {
       const next: FieldErrors = {}
@@ -211,7 +215,7 @@ export function CreatePage({
     <div className="min-h-dvh">
       <SiteCursor />
       <JumpCurtain phase={curtain.phase} label={curtain.label} />
-      <AppHeader>{headerSlot}</AppHeader>
+      <AppHeader showTemporaryTheme={!serverMode}>{headerSlot}</AppHeader>
 
       {/* ——— Обложка ——— */}
       <section className="mx-auto w-full max-w-[1280px] px-5 pt-10 sm:px-8 lg:pt-14">
@@ -353,6 +357,17 @@ export function CreatePage({
                 </p>
               </div>
 
+              {serverMode && (
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={themeIdInput} className="eyebrow">Оформление слайдов</Label>
+                  <select id={themeIdInput} value={themeId ?? ''} className="w-full rounded border border-input bg-card px-3 py-2 text-sm"
+                    onChange={(event) => setThemeId(event.currentTarget.value === 'urfu' ? 'urfu' : undefined)}>
+                    <option value="">Нейтральное</option>
+                    <option value="urfu">УрФУ</option>
+                  </select>
+                </div>
+              )}
+
               <SourceTextField
                 id={textId}
                 value={draft.text}
@@ -447,7 +462,7 @@ export function CreatePage({
       <footer className="border-t border-border">
         <div className="mx-auto flex w-full max-w-[1280px] flex-wrap items-center justify-between gap-3 px-5 py-6 sm:px-8">
           <span className="font-display text-[15px] italic text-muted-foreground">Презентатор</span>
-          <span className="eyebrow">Оформление слайдов — временная тема до утверждения брендбука</span>
+          {!serverMode && <span className="eyebrow">Оформление слайдов — временная тема</span>}
         </div>
       </footer>
     </div>

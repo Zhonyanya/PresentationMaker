@@ -21,7 +21,7 @@ export interface RenderContext {
   total: number
   /** Порядковый номер раздела — для слайдов-разделителей */
   sectionNumber: number
-  sideLead?: boolean
+  leadPlacement?: 'top' | 'side' | 'inline'
 }
 
 type KeysOfType<S, T> = {

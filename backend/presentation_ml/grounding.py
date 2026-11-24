@@ -21,6 +21,10 @@ _SCOPE = re.compile(
 _CHANGE_MODIFIER = re.compile(r'\b(?:на|by)\s*$', re.IGNORECASE)
 _NEGATION = re.compile(r'\b(?:не|нет|not|never)\b', re.IGNORECASE)
 _CONTEXT_WORD = re.compile(r'\b(?:[А-ЯЁа-яё]{5,}|[A-Za-z]{5,})\b')
+_PREFIXED_UNIT = re.compile(
+    r'(?<=\d)[ \t\u00a0\u202f]+(?P<unit>(?:[kMGmµкМГм])?'
+    r'(?P<base>Вт·ч|Wh|Вт|Дж|Па|W|J|Pa|Hz|Гц))(?![\w·])',
+)
 _REPORT_CONTEXT = {'pilot', 'project', 'report', 'results', 'study', 'пилотн', 'проект', 'отчета'}
 
 
@@ -39,15 +43,47 @@ def _context_words(value: str) -> set[str]:
     }
 
 
+def _unit_address(clause, match):
+    # Keep the entire claim including signs, denominator, and every other value.
+    return (' '.join(clause[:match.start('unit')].split()), match['base'],
+            ' '.join(clause[match.end('unit'):].split()))
+
+
+_DENOMINATOR = re.compile(r'\s*(?:/|на\s+|per\s+)(\d[\d \u00a0\u202f]*)\s+([^\W\d_]+)', re.I)
+_END_VALUE = re.compile(r'(?<![\d.,])([+−-]?\d+(?:[.,]\d+)?)\s*$')
+
+
+def _rate_address(clause, match):
+    denominator = _DENOMINATOR.match(clause, match.end('unit'))
+    value = _END_VALUE.search(clause[:match.start('unit')])
+    if not denominator or not value:
+        return None
+    return (value[1].replace(',', '.'), match['base'],
+            ''.join(denominator[1].split()), denominator[2].casefold())
+
+
 def restore_percentage_scopes(
     document: dict, paragraphs: Iterable[tuple[str, str]], *,
-    cited_blocks: dict[str, set[str]] | None = None,
+    cited_blocks: dict[str, set[str]] | None = None, include_percentage_scopes: bool = True,
 ) -> None:
-    """Restore an omitted short scope only when the number, base and context agree."""
+    """Restore omitted scopes and confirm unit prefixes against matching source claims."""
     evidence = defaultdict(list)
-    for block_id, paragraph in paragraphs:
+    units = defaultdict(set)
+    rates = defaultdict(list)
+    paragraphs = list(paragraphs)
+    for index, (block_id, paragraph) in enumerate(paragraphs):
+        following = paragraphs[index + 1][1] if index + 1 < len(paragraphs) else ''
+        continuation = (' ' + following.split()[0] if following[:1].islower() else '')
         for clause in _CLAUSE_BOUNDARY.split(paragraph):
-            for match in _PERCENTAGE.finditer(clause):
+            for match in _PREFIXED_UNIT.finditer(clause):
+                units[_unit_address(clause, match)].add((match['unit'], block_id))
+                key = _rate_address(clause, match)
+                if key is None and paragraph.endswith(clause) and re.fullmatch(
+                        r'\s*(?:/|на\s+|per\s+)\d[\d \u00a0\u202f]*', clause[match.end('unit'):], re.I):
+                    key = _rate_address(clause + continuation, match)
+                if key:
+                    rates[key].append((match['unit'], block_id, _context_words(clause[:match.start()])))
+            for match in _PERCENTAGE.finditer(clause) if include_percentage_scopes else ():
                 scope = ' '.join(clause[match.end():].split())
                 context = clause[:match.start()]
                 # Unqualified occurrences count for ambiguity too.
@@ -61,6 +97,18 @@ def restore_percentage_scopes(
         clauses = _CLAUSE_BOUNDARY.split(value)
         for index in range(0, len(clauses), 2):
             clause = clauses[index]
+            for match in reversed(list(_PREFIXED_UNIT.finditer(clause))):
+                options = {unit for unit, block in units.get(_unit_address(clause, match), ())
+                           if allowed_blocks is None or block in allowed_blocks}
+                if not options and (key := _rate_address(clause, match)):
+                    context = _context_words(clause[:match.start()]) - _REPORT_CONTEXT
+                    candidates = [(unit, words) for unit, block, words in rates.get(key, ())
+                                  if allowed_blocks is None or block in allowed_blocks]
+                    if any(context & words for _, words in candidates):
+                        options = {unit for unit, _ in candidates}
+                if len(options) == 1:
+                    clause = clause[:match.start('unit')] + next(iter(options)) + clause[match.end('unit'):]
+            clauses[index] = clause
             matches = list(_PERCENTAGE.finditer(clause))
             if len(matches) != 1:
                 continue
@@ -83,7 +131,7 @@ def restore_percentage_scopes(
         result = ''.join(clauses)
         return result if len(result.encode('utf-16-le')) // 2 <= maximum else value
 
-    if not evidence:
+    if not evidence and not units:
         return
     for slide in document['slides']:
         allowed_blocks = cited_blocks.get(slide['id'], set()) if cited_blocks is not None else None

@@ -3,6 +3,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 import presentation_ml
+from app.presentations.source_blocks import SOURCE_ADAPTER
+from presentation_ml.deck_plan import plan_evidence, read_intents, render_planned_text
 
 SOURCE = {"blocks": [
     {"kind": "text", "id": "p1-text", "page": 1,
@@ -68,6 +70,20 @@ def test_generation_binds_intent_to_source_without_graph_facts(monkeypatch):
     assert (evidence.id, evidence.block_id, evidence.page) == ("block-1", "p1-text", 1)
 
 
+def test_generation_accepts_a_compact_plan_without_repeated_slide_prose(monkeypatch):
+    def inspect(request):
+        required = request["schema"]["properties"]["plan"]["items"]["required"]
+        assert set(required) == {"evidence_ids", "visual_kind"}
+
+    result = planned_generation(monkeypatch, {
+        "title": "Архив",
+        "plan": [{"evidence_ids": ["block-1"], "visual_kind": "text"}],
+        "slides": [{"layout": "text", "title": "Запись", "body": "Архив открыт по записи."}],
+    }, inspect_request=inspect)
+    assert result.plan.slides[1].intents[0].evidence[0].block_id == "p1-text"
+    assert result.document["slides"][1]["body"] == "Архив открыт по записи."
+
+
 def test_planned_generation_carries_opening_figures_and_literal_definitions(monkeypatch):
     source = {"blocks": [
         {"kind": "text", "id": "intro", "page": 1, "text": "Introduction"},
@@ -103,13 +119,14 @@ def test_planned_generation_carries_opening_figures_and_literal_definitions(monk
 
 
 @pytest.mark.parametrize("evidence_ids", [("invented",), ()])
-def test_generation_rejects_unresolved_evidence_on_content_slide(monkeypatch, evidence_ids):
+def test_plan_rejects_unresolved_evidence_on_content_slide(evidence_ids):
+    _, _, references, verbatim = plan_evidence(SOURCE_ADAPTER.validate_python(SOURCE), [])
     with pytest.raises(ValueError, match="evidence"):
-        planned_generation(monkeypatch, {
+        read_intents({
             "title": "Архив",
             "plan": [intent("Требуется запись", *evidence_ids)],
             "slides": [{"layout": "text", "title": "Запись", "body": "Запишитесь заранее."}],
-        })
+        }, references, verbatim)
 
 
 def test_generation_renders_exact_numeric_source_paragraph_before_filling_closing(monkeypatch):
@@ -169,17 +186,20 @@ def test_planned_v4_can_preserve_a_short_nonnumeric_limitation_verbatim(monkeypa
     (["block-3"], "text"),
     (["block-1"], "title"),
 ])
-def test_generation_validates_verbatim_references(monkeypatch, ids, layout):
-    source = {"blocks": [
+def test_plan_validates_verbatim_references(ids, layout):
+    source = SOURCE_ADAPTER.validate_python({"blocks": [
         {"kind": "text", "id": "journal", "text": "В отчёт вернули 11 старых записей о занятиях."},
         {"kind": "text", "id": "notes", "text": "Обсуждение всё ещё продолжается."},
-    ]}
+    ]})
+    _, _, references, verbatim = plan_evidence(source, [])
+    reply = {
+        "title": "Занятия",
+        "plan": [{**intent("Учёт", "block-1"), "verbatim_block_ids": ids}],
+        "slides": [{"layout": layout, "title": "Учёт", "body": ""}],
+    }
     with pytest.raises(ValueError, match="verbatim"):
-        planned_generation(monkeypatch, {
-            "title": "Занятия",
-            "plan": [{**intent("Учёт", "block-1"), "verbatim_block_ids": ids}],
-            "slides": [{"layout": layout, "title": "Учёт", "body": ""}],
-        }, source=source)
+        intents = read_intents(reply, references, verbatim)
+        render_planned_text(reply, intents, verbatim, source)
 
 
 def test_generation_prints_a_repeated_valid_verbatim_reference_once(monkeypatch):
@@ -237,6 +257,26 @@ def test_verbatim_final_block_preserves_may_decision_without_repeating_its_summa
     assert closing == {"id": "may", "layout": "closing", "title": "Планы на май",
                        "subtitle": decision, "notes": "Проверено по докладу."}
     assert deck.plan.slides[-1].intents[0].evidence[0].block_id == "plans"
+
+
+@pytest.mark.parametrize("short_source", [False, True])
+def test_budget_compaction_keeps_verified_visual_with_its_original_slide(short_source):
+    from presentation_ml import _fit_generation_budget, _pack_short_generation
+    from presentation_ml.deck_plan import EvidenceAddress, SlideIntent
+
+    slides = [
+        {'id': 'cover', 'layout': 'title', 'title': 'Output'},
+        {'id': 'table', 'layout': 'text', 'title': 'Totals', 'body': 'Totals.'},
+        {'id': 'method', 'layout': 'text', 'title': 'Method', 'body': 'Measurement details.'},
+        {'id': 'context', 'layout': 'text', 'title': 'Context', 'body': 'Additional context. ' * 8},
+        {'id': 'closing', 'layout': 'closing', 'title': 'Summary'},
+    ]
+    plans = {s['id']: (SlideIntent('', '', (), ''),) for s in slides}
+    plans['table'] = (SlideIntent('', '', (EvidenceAddress('block-1', 'source-table'),), '', 'table'),)
+    compact = _pack_short_generation if short_source else _fit_generation_budget
+    fitted = compact({'title': 'Output', 'slides': slides}, 4, plans)['slides']
+    assert fitted[1] == slides[1]
+    assert 'Additional context.' in fitted[2]['body']
 
 
 @pytest.mark.parametrize("long_source", [False, True])
@@ -345,29 +385,31 @@ def test_evidence_addresses_the_end_of_a_long_text_block(monkeypatch):
 
 
 @pytest.mark.parametrize("layout", ["section", "closing", "title"])
-def test_boundary_with_substantive_subtitle_requires_evidence(monkeypatch, layout):
+def test_boundary_with_substantive_subtitle_requires_evidence(layout):
+    _, _, references, verbatim = plan_evidence(SOURCE_ADAPTER.validate_python(SOURCE), [])
     with pytest.raises(ValueError, match="evidence"):
-        planned_generation(monkeypatch, {
+        read_intents({
             "title": "Архив",
             "plan": [intent("В 14:00"), intent("Требуется запись", "block-1")],
             "slides": [
                 {"layout": layout, "title": "Часы работы", "subtitle": "Выдача до 14:00."},
                 {"layout": "text", "title": "Запись", "body": "Запишитесь заранее."},
             ],
-        })
+        }, references, verbatim)
 
 
-def test_compaction_rejects_content_without_evidence_even_after_layout_changes(monkeypatch):
-    with pytest.raises(ValueError, match="evidence"):
-        planned_generation(monkeypatch, {
-            "title": "Архив",
-            "plan": [intent("Введение"), intent("Суббота"), intent("Итог", "block-2")],
-            "slides": [
-                {"layout": "section", "title": "Введение"},
-                {"layout": "section", "title": "Суббота"},
-                {"layout": "closing", "title": "Часы работы", "subtitle": "Выдача до 14:00."},
-            ],
-        }, slide_count=3)
+def test_compaction_drops_the_plan_if_a_final_slide_has_no_evidence(monkeypatch):
+    deck = planned_generation(monkeypatch, {
+        "title": "Архив",
+        "plan": [intent("Введение"), intent("Суббота"), intent("Итог", "block-2")],
+        "slides": [
+            {"layout": "section", "title": "Введение"},
+            {"layout": "section", "title": "Суббота"},
+            {"layout": "closing", "title": "Часы работы", "subtitle": "Выдача до 14:00."},
+        ],
+    }, slide_count=3)
+    assert deck.plan is None
+    assert len(deck.document["slides"]) == 3
 
 
 @pytest.mark.parametrize("visual_kind", ["comparison", "text"])
@@ -562,3 +604,70 @@ def test_revision_of_body_keeps_source_owned_composition(monkeypatch):
     )
     assert result["slides"] == [{**slide, "body": "Электронная форма.", "composition": composition}]
     assert document["slides"][0]["body"] == "Замер по форме."
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_pasted_table_reaches_slide_as_source_material(monkeypatch, wrapped):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+
+    def respond(**request):
+        assert request['payload']['source_visuals'] == [{'id': 'block-1', 'kind': 'table'}]
+        return {
+            'title': 'Monthly loans',
+            'slides': [
+                {'layout': 'title', 'title': 'Monthly loans'},
+                {'layout': 'text', 'title': 'Loans by month', 'body': 'Completed loans.'},
+                {'layout': 'closing', 'title': 'Summary'},
+            ],
+            'plan': [
+                intent('Monthly loans'),
+                intent('Completed loans', 'block-1', visual_kind='table'),
+                intent('Summary'),
+            ],
+        }
+
+    monkeypatch.setattr(presentation_ml, 'request_document', respond)
+    text = '| Month | Loans, units |\n| --- | --- |\n| January | 48 |\n| February | 62 |'
+    source = {'blocks': [{'kind': 'text', 'id': 'text-1', 'text': text}]} if wrapped else None
+    result = presentation_ml._generate(
+        text='' if wrapped else text, source=source,
+        slideCount=4, job_id='test',
+        deadline=(datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+    )
+    material = result.document['slides'][1]['sourceMaterial']
+    assert material['kind'] == 'table'
+    assert material['rows'] == [['Month', 'Loans, units'], ['January', '48'], ['February', '62']]
+
+
+@pytest.mark.parametrize('february, attached', [('62', True), ('62.5', False)])
+def test_pasted_table_fallback_requires_matching_label_value_pairs(february, attached):
+    from presentation_ml.deck_plan import apply_referenced_tables
+    from presentation_ml.source_document import text_blocks
+
+    source = text_blocks('| Month | Loans, units |\n| --- | --- |\n| January | 48 |\n| February | 62 |')
+    slide = {'layout': 'text', 'title': 'Monthly loans', 'body': f'January — 48, February — {february}.'}
+    apply_referenced_tables({'slides': [slide]}, source)
+    assert ('sourceMaterial' in slide) == attached
+
+
+def test_large_paginated_source_keeps_late_table_in_bounded_plan_text():
+    from app.presentations.source_blocks import MAX_SOURCE_TEXT, source_text
+
+    blocks = [
+        {'kind': 'text', 'id': f'page-{page}', 'page': page,
+         'text': 'Measurement method and conditions. ' * 400}
+        for page in range(1, 11)
+    ]
+    blocks.append({'kind': 'table', 'id': 'late-table', 'page': 11,
+                   'rows': [['Month', 'Loans, units'], ['January', '48'], ['February', '62']]})
+    source = SOURCE_ADAPTER.validate_python({'blocks': blocks})
+
+    from presentation_ml.deck_plan import LARGE_SOURCE_PROMPT_LIMIT
+
+    body, _, references, _ = plan_evidence(source, [])
+
+    assert len(source_text(source).encode('utf-16-le')) // 2 > MAX_SOURCE_TEXT
+    assert len(body.encode('utf-16-le')) // 2 <= LARGE_SOURCE_PROMPT_LIMIT
+    assert '[block-11]\nMonth\tLoans, units' in body
+    assert references['block-11'].block_id == 'late-table'
+    assert references['block-11'].page == 11

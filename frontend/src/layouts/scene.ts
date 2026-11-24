@@ -125,6 +125,7 @@ export type SceneElement = SceneRect | SceneText | SceneImage | SceneTable | Sce
 
 export interface SlideScene {
   background: string
+  backgroundImage?: string
   elements: SceneElement[]
 }
 

@@ -20,7 +20,7 @@ export const titleLayout: LayoutDefinition<'title'> = {
   toContent: (slide) => ({ title: slide.title, subtitle: slide.subtitle, items: [] }),
   buildScene: (slide, ctx) => {
     const { colors, spacing, typography, fonts, slide: size } = ctx.theme
-    const width = Math.min(contentWidth(ctx), 10.8)
+    const width = Math.min(contentWidth(ctx), ctx.theme.artwork?.coverTextWidth ?? 10.8)
     const base = { fontFace: fonts.body, align: 'left' as const, lineSpacing: 1.05, paragraphSpacing: 0 }
     return {
       background: colors.primary,
@@ -50,7 +50,10 @@ export const titleLayout: LayoutDefinition<'title'> = {
           placeholder: 'Подпись',
           style: { ...base, color: colors.textOnPrimaryMuted, valign: 'top' },
         }),
-        { type: 'rect', fill: colors.accent, box: { x: 0, y: size.height - 0.12, w: size.width, h: 0.12 } },
+        ...(ctx.theme.artwork ? [] : [{
+          type: 'rect' as const, fill: colors.accent,
+          box: { x: 0, y: size.height - 0.12, w: size.width, h: 0.12 },
+        }]),
         ...logoElement(ctx, true),
       ],
     }

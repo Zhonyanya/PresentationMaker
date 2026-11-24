@@ -121,3 +121,20 @@ def test_docx_wire_blocks_keep_table_row_without_pdf_pagination():
     for field, value in [('fact_id', 'unknown'), ('second_value', '36'), ('first_period', '2021')]:
         with pytest.raises(ValueError):
             verified_table_claim(payload, {**reply, field: value})
+
+
+def test_text_blocks_preserves_pasted_table_and_surrounding_prose():
+    source = text_blocks(
+        'Monthly loans\n'
+        '| Month | Loans, units |\n'
+        '| :--- | ---: |\n'
+        '| January | 48 |\n'
+        '| February | 62 |\n'
+        'Completed loans only.'
+    )
+    heading, table, caveat = source.blocks
+    assert heading.text == 'Monthly loans'
+    assert table.kind == 'table'
+    assert table.id
+    assert table.rows == (('Month', 'Loans, units'), ('January', '48'), ('February', '62'))
+    assert caveat.text == 'Completed loans only.'

@@ -435,7 +435,7 @@ export function ServerEditor({ document, scenes, selected, selectedIndex, accoun
 } & Omit<RevisionPanelProps, 'index' | 'locked' | 'status'>) {
   return (
     <div className="relative flex min-h-dvh flex-col bg-background lg:h-dvh lg:overflow-hidden">
-      <EditorHeader title={document.title} onBack={onBack} onExport={() => onExportOpenChange(true)} extra={account} />
+      <EditorHeader title={document.title} showTemporaryTheme={!document.themeId} onBack={onBack} onExport={() => onExportOpenChange(true)} extra={account} />
       {notice && <div className="shrink-0 border-b border-border px-4 py-3">{notice}</div>}
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[236px_minmax(0,1fr)_340px] lg:grid-rows-[minmax(0,1fr)] xl:grid-cols-[244px_minmax(0,1fr)_360px]">
         <div className="min-h-0 max-lg:order-2 lg:contents">
@@ -464,7 +464,7 @@ function formatDate(value: string) {
 
 function LibraryRow({ item, current, busy, onOpen, onDelete }: { item: LibraryItem; current: boolean; busy: boolean; onOpen: () => void; onDelete: () => void }) {
   const [confirming, setConfirming] = useState(false)
-  const title = item.title?.trim() || (item.active ? 'Готовится…' : 'Без названия')
+  const title = item.title?.trim() || (item.active ? 'Готовится…' : item.slide_count ? 'Без названия' : 'Черновик без слайдов')
   return (
     <li className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border py-3.5 last:border-b-0">
       <div className="min-w-0 flex-1">

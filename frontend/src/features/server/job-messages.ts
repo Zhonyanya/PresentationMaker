@@ -6,7 +6,7 @@ export const STRUCTURE_COMMAND_MESSAGE =
   'Командой можно менять только содержание слайдов: текст, формулировки, макет. Добавлять, удалять и переставлять слайды, ' +
   'вставлять картинки и таблицы нельзя. Попробуйте, например: «сократи пункты на слайде 3». Документ не изменился.'
 
-const FALLBACK = 'Задание завершилось с ошибкой. Предыдущий документ сохранён.'
+const FALLBACK = 'Задание завершилось с ошибкой.'
 
 /** Тип задания; null — неизвестен (например, после перезагрузки без сохранённых сведений) */
 type JobKind = 'generate' | 'revise' | null
@@ -18,9 +18,21 @@ type JobKind = 'generate' | 'revise' | null
  * ML-модуль настроен не полностью. Подсказка про команды уместна только для правки:
  * при генерации или неизвестном типе показываем сообщение сервера как есть.
  */
-export function jobFailure(error: { code: string; message: string } | null | undefined, kind: JobKind): { message: string; canRefresh: boolean } {
+export function jobFailure(
+  error: { code: string; message: string } | null | undefined,
+  kind: JobKind,
+  hasSource = false,
+): { message: string; canRefresh: boolean } {
   if (error?.code === 'ML_CAPABILITY_UNAVAILABLE' && kind === 'revise') return { message: STRUCTURE_COMMAND_MESSAGE, canRefresh: false }
-  return { message: error?.message || FALLBACK, canRefresh: true }
+  const message = kind === 'generate' && error?.code === 'INVALID_ML_RESPONSE'
+    ? 'Не удалось создать презентацию.'
+    : error?.message || FALLBACK
+  return {
+    message: kind === 'generate' && hasSource
+      ? message + ' Доклад остался в форме. Нажмите «Создать презентацию», чтобы попробовать снова.'
+      : message,
+    canRefresh: false,
+  }
 }
 
 /** Что делать с ожиданием, когда запрос статуса задания не удался. */

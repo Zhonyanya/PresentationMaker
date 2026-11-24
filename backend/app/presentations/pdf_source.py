@@ -14,7 +14,10 @@ from typing import BinaryIO
 from uuid import uuid4
 
 import pdfplumber
-from pdfplumber.utils import extract_text
+from pdfplumber.utils import cluster_objects, extract_text
+
+from .pdf_equations import numbered_equations
+from .pdf_vector_charts import read_vector_bar_charts
 
 _MIN_COLUMN_GAP = 24
 
@@ -24,6 +27,7 @@ class SourceTable:
     bounds: tuple[float, float, float, float]
     rows: tuple[tuple[str | None, ...], ...]
     number: str | None = None
+    caption: str = ''
 
     @property
     def has_tabular_content(self) -> bool:
@@ -121,6 +125,7 @@ class SourcePage:
     figures: tuple[SourceFigure, ...] = ()
     paragraphs: tuple[SourceParagraph, ...] = ()
     column_breaks: tuple[float, ...] = ()
+    equations: tuple[tuple[str, tuple[float, float, float, float]], ...] = ()
 
 
 def _contains(outer, inner):
@@ -137,7 +142,14 @@ _CAPTION = re.compile(
     r'^[ \t]*((?:диаграмма|рисунок|рис\.|схема|график)[ \t]*(?:№[ \t]*)?\d+)\b[^\n]*',
     re.I | re.M,
 )
+_INDEX_CAPTION = re.compile(
+    r'^[ \t]*[^\[\]\n]{3,96}\[[A-Z]{2,8}\d{3,8}(?:,\s*[A-Z]{2,8}\d{3,8}){0,3}\]',
+    re.M,
+)
 _TABLE_CAPTION = re.compile(r'^[ \t]*таблица[ \t]*(?:№[ \t]*)?(\d+)\b', re.I | re.M)
+_RULED_TABLE_CAPTION = re.compile(r'\b(?:таблица|table)\s*(?:№\s*)?(\d+)\s*:', re.I)
+_SUPERSCRIPT = str.maketrans('0123456789+-−', '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻')
+_SUBSCRIPT = str.maketrans('0123456789+-−', '₀₁₂₃₄₅₆₇₈₉₊₋₋')
 _LIST_ITEM = re.compile(r'^(?:[•●▪◦‣]|[-–—]|\d{1,3}[.)])\s+')
 
 
@@ -149,6 +161,91 @@ def _table_number(page, bounds):
         return None
     matches = page.crop((left, above, right, top)).search(_TABLE_CAPTION, return_chars=False)
     return _TABLE_CAPTION.match(matches[-1]['text'])[1] if matches else None
+
+
+def _ruled_cell(glyphs):
+    if not glyphs:
+        return ''
+    size = max(glyph['size'] for glyph in glyphs)
+    baseline = median(glyph['bottom'] for glyph in glyphs if glyph['size'] >= size * 0.9)
+    chars = []
+    for glyph in glyphs:
+        value = glyph['text']
+        offset = glyph['bottom'] - baseline
+        if glyph['size'] < size * 0.85 and abs(offset) > 1:
+            value = value.translate(_SUPERSCRIPT if offset < 0 else _SUBSCRIPT)
+        chars.append(dict(glyph, text=value, doctop=0))
+    value = extract_text(chars, x_tolerance=1.5).strip()
+    if re.fullmatch(r'[×+−-]?\s*\d+[.,]\s+\d+%?', value):
+        return value.replace(' ', '')
+    return value
+
+
+def _ruled_table_rows(page, bounds, header_bottom):
+    left, top, right, bottom = bounds
+    glyphs = [char for char in page.chars if char['upright'] and char['text'].strip()
+              and _contains(bounds, _bounds(char))]
+    if not glyphs:
+        return ()
+    font = median(char['size'] for char in glyphs)
+    # A column separator must be empty across the full header and all rows.
+    spans = []
+    for start, stop in sorted((char['x0'], char['x1']) for char in glyphs):
+        if spans and start <= spans[-1][1]:
+            spans[-1][1] = max(stop, spans[-1][1])
+        else:
+            spans.append([start, stop])
+    cuts = [(end + start) / 2 for (_, end), (start, _) in pairwise(spans)
+            if start - end >= max(4, font * 0.46)]
+    if not 1 <= len(cuts) <= 20:
+        return ()
+    main = [char for char in glyphs if char['top'] >= header_bottom and char['size'] >= font * 0.85]
+    baselines = [median(char['bottom'] for char in row)
+                 for row in cluster_objects(main, 'bottom', font * 0.42)]
+    if not 2 <= len(baselines) <= 60:
+        return ()
+    cells = [[[] for _ in range(len(cuts) + 1)] for _ in range(len(baselines) + 1)]
+    for char in glyphs:
+        row = 0 if char['top'] < header_bottom else 1 + min(
+            range(len(baselines)), key=lambda index: abs(baselines[index] - char['bottom']),
+        )
+        cells[row][bisect_right(cuts, char['x0'])].append(char)
+    rows = tuple(tuple(_ruled_cell(cell) for cell in row) for row in cells)
+    return rows if all(all(row) for row in rows) else ()
+
+
+def _captioned_ruled_tables(page, grid_tables):
+    """Recognize captioned tables with top, header and bottom rules but no vertical grid."""
+    rules = defaultdict(list)
+    for edge in page.horizontal_edges:
+        if edge['x1'] - edge['x0'] >= 65:
+            rules[(round(edge['x0'], 1), round(edge['x1'], 1))].append(edge)
+    if not any(len(edges) >= 3 for edges in rules.values()):
+        return ()
+    captions = page.search(_RULED_TABLE_CAPTION, return_chars=False)
+    tables = []
+    for edges in rules.values():
+        edges.sort(key=lambda edge: edge['top'])
+        last_bottom = page.bbox[1]
+        for first, header, last in zip(edges, edges[1:], edges[2:]):
+            left, top, right, _ = _bounds(first)
+            header_bottom, bottom = header['top'], last['top']
+            if top < last_bottom or not 8 <= header_bottom - top <= 28 or bottom - header_bottom < 12:
+                continue
+            right = min(right, page.bbox[2])
+            bounds = left, top, right, bottom
+            if any(_contains(bounds, table.bounds) or _contains(table.bounds, bounds)
+                   for table in grid_tables):
+                continue
+            nearby = [caption for caption in captions
+                      if abs(caption['x0'] - left) <= 24 and 0 <= top - caption['bottom'] <= 60]
+            if not nearby:
+                continue
+            caption = max(nearby, key=lambda item: item['bottom'])
+            if rows := _ruled_table_rows(page, bounds, header_bottom):
+                tables.append(SourceTable(bounds, rows, caption['groups'][0]))
+                last_bottom = bottom
+    return tuple(tables)
 
 
 def _captioned_figure(page, frame):
@@ -199,6 +296,25 @@ def _framed_figures(page):
     return tuple(figures.values())
 
 
+def _indexed_raster_figure(page, bounds):
+    left, top, right, bottom = bounds
+    if right - left < 96 or bottom - top < 70:
+        return None
+    page_left, page_top, page_right, _ = page.bbox
+    search_top = max(page_top, top - 40)
+    if search_top >= top:
+        return None
+    nearby = page.crop((max(page_left, left - 6), search_top, min(page_right, right + 6), top))
+    matches = [line for line in nearby.search(_INDEX_CAPTION, return_chars=False)
+               if abs(left - line['x0']) <= 12]
+    if len(matches) != 1:
+        return None
+    caption = matches[0]
+    title = caption['text'].split('[', 1)[0].strip()
+    return SourceFigure((min(left, caption['x0']), caption['top'], right, bottom),
+                        title, caption['text'].strip())
+
+
 def _page_illustrations(page, seen_images):
     figures = list(_framed_figures(page))
     images = []
@@ -210,7 +326,7 @@ def _page_illustrations(page, seen_images):
             _contains(figure.bounds, bounds) for figure in figures
         ):
             continue
-        figure = _captioned_figure(page, bounds)
+        figure = _captioned_figure(page, bounds) or _indexed_raster_figure(page, bounds)
         if figure:
             figures.append(figure)
             continue
@@ -230,8 +346,12 @@ def _prose_paragraphs(lines) -> tuple[SourceParagraph, ...]:
         if group:
             previous = group[-1]
             heights = [line['bottom'] - line['top'], previous['bottom'] - previous['top']]
-            if (line['top'] - previous['top'] > 1.65 * max(heights)
-                    or abs(heights[0] - heights[1]) > 0.22 * max(heights)
+            height = max(heights)
+            likely_wrap = (not previous['text'].endswith(('.', '!', '?'))
+                           and line['x0'] <= previous['x0'] + 0.3 * height
+                           and previous['x1'] - previous['x0'] >= 11 * height)
+            if (line['top'] - previous['top'] > (1.95 if likely_wrap else 1.65) * height
+                    or abs(heights[0] - heights[1]) > 0.22 * height
                     or _LIST_ITEM.match(line['text'])):
                 paragraphs.append(group)
                 group = []
@@ -367,15 +487,20 @@ def read_pdf(source: BinaryIO, *, max_pages: int = 250) -> tuple[SourcePage, ...
         if len(pdf.pages) > max_pages:
             raise ValueError('PDF exceeds the page limit')
         for page in pdf.pages:
+            charts = tuple(SourceTable(bounds, rows, caption=caption)
+                           for bounds, _, caption, rows in read_vector_bar_charts(page))
             candidates = (
                 SourceTable(table.bbox, tuple(tuple(row) for row in table.extract()))
                 for table in page.find_tables()
                 if len(table.rows) >= 2 and len(table.columns) >= 2
+                and not any(_contains(chart.bounds, table.bbox) for chart in charts)
             )
             tables = tuple(
                 replace(table, number=_table_number(page, table.bounds))
                 for table in candidates if table.has_tabular_content
             )
+            tables = (*tables, *_captioned_ruled_tables(page, tables))
+            tables = (*tables, *charts)
             figures, images = _page_illustrations(page, seen_images)
             excluded = (*[table.bounds for table in tables], *(figure.bounds for figure in figures))
             prose = page.filter(
@@ -390,7 +515,7 @@ def read_pdf(source: BinaryIO, *, max_pages: int = 250) -> tuple[SourcePage, ...
                 page.page_number, '\n'.join(line['text'] for region in regions for line in region),
                 tables, images, figures,
                 tuple(paragraph for region in regions for paragraph in _prose_paragraphs(region)),
-                breaks,
+                breaks, tuple(numbered_equations(prose)),
             ))
             page.close()
     return tuple(result)
@@ -450,12 +575,17 @@ def source_material_slide(
 
 
 def _figure_context(text: str, reference: str) -> str:
-    kind, number = re.fullmatch(r'(.+?)[ \t]*(?:№[ \t]*)?(\d+)', reference).groups()
+    match = re.fullmatch(r'(.+?)[ \t]*(?:№[ \t]*)?(\d+)', reference)
+    if not match:
+        return ''
+    kind, number = match.groups()
     variants = {
         'диаграмма': r'диаграмм[а-яё]*', 'рисунок': r'рисун(?:ок|к[а-яё]*)|рис\.',
         'рис.': r'рисун(?:ок|к[а-яё]*)|рис\.', 'схема': r'схем[а-яё]*', 'график': r'график[а-яё]*',
     }
-    mention = re.compile(rf'\b(?:{variants[kind.casefold()]})\s*(?:№\s*)?{number}\b', re.I)
+    if (variant := variants.get(kind.casefold())) is None:
+        return ''
+    mention = re.compile(rf'\b(?:{variant})\s*(?:№\s*)?{number}\b', re.I)
     sentences = re.split(r'(?<!\bрис)(?<=[.!?]) (?=[А-ЯЁA-Z])', ' '.join(text.split()))
     return next((sentence for sentence in sentences if 25 <= len(sentence) <= 160
                  and mention.search(sentence)), '')

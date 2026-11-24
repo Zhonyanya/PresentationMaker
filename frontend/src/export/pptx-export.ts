@@ -4,7 +4,8 @@ import { buildPresentationScenes } from '@/layouts/registry'
 import type { SceneElement, SceneText } from '@/layouts/scene'
 import { paragraphRuns } from '@/layouts/scene'
 import { tableCellStyle, visibleTableCells } from '@/layouts/source-material'
-import { presentationTheme, type PresentationTheme } from '@/theme/presentation-theme'
+import type { PresentationTheme } from '@/theme/presentation-theme'
+import { prepareThemeForExport, resolvePresentationTheme } from '@/theme/theme-presets'
 import { sanitizeText } from '@/lib/text'
 
 /**
@@ -149,7 +150,7 @@ function addElement(pptx: PptxGenJS, slide: PptxSlide, element: SceneElement) {
 }
 
 export async function buildPptx(presentation: Presentation, options: ExportOptions = {}): Promise<PptxGenJS> {
-  const theme = options.theme ?? presentationTheme
+  const theme = await prepareThemeForExport(options.theme ?? resolvePresentationTheme(presentation.themeId))
   const includeNotes = options.includeNotes ?? true
   const { default: PptxGenJSClass } = await import('pptxgenjs')
   const pptx = new PptxGenJSClass()
@@ -165,7 +166,9 @@ export async function buildPptx(presentation: Presentation, options: ExportOptio
   presentation.slides.forEach((slideData, index) => {
     const scene = scenes[index]
     const slide = pptx.addSlide()
-    slide.background = { color: hex(scene.background) }
+    if (!scene.backgroundImage) slide.background = { color: hex(scene.background) }
+    else if (scene.backgroundImage.startsWith('data:')) slide.background = { data: scene.backgroundImage }
+    else slide.background = { path: scene.backgroundImage }
     scene.elements.forEach((element) => addElement(pptx, slide, element))
     if (includeNotes && slideData.notes?.trim()) slide.addNotes(sanitizeText(slideData.notes.trim()))
   })

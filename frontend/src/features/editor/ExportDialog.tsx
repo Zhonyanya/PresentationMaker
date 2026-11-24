@@ -7,7 +7,7 @@ import type { Presentation } from '@/domain/presentation'
 import type { SlideScene } from '@/layouts/scene'
 import { sceneHasOverflow } from '@/hooks/usePresentationScenes'
 import { downloadPptx, toFileName } from '@/export/pptx-export'
-import { presentationTheme } from '@/theme/presentation-theme'
+import { resolvePresentationTheme } from '@/theme/theme-presets'
 import { plural } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -46,8 +46,9 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
   }, [open, presentation.title])
 
   const problems = presentation.slides
-    .map((slide, index) => ({ slide, index, overflow: sceneHasOverflow(scenes[index]) }))
+    .map((slide, index) => ({ slide, index, overflow: sceneHasOverflow(scenes[index], presentation.themeId) }))
     .filter((item) => item.overflow)
+  const theme = resolvePresentationTheme(presentation.themeId)
   const notesCount = presentation.slides.filter((s) => s.notes?.trim()).length
   const count = presentation.slides.length
 
@@ -142,7 +143,7 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
             {[
               ['Слайдов', String(count)],
               ['Формат', '16:9'],
-              ['Оформление', presentationTheme.isOfficial ? presentationTheme.name : 'Временное'],
+              ['Оформление', theme.isOfficial ? theme.name : 'Нейтральное'],
             ].map(([term, value]) => (
               <div key={term} className="flex flex-col gap-1.5 border-l border-border pl-4 first:border-l-0 first:pl-0">
                 <dt className="eyebrow !text-[10px]">{term}</dt>

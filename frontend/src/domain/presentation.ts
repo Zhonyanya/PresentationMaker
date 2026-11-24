@@ -151,9 +151,12 @@ export const slideSchema = z.discriminatedUnion('layout', [
   closingSlideSchema,
 ])
 
+export const themeIdSchema = z.literal('urfu')
+
 export const presentationSchema = z
   .object({
     title: text(LIMITS.titleMax),
+    themeId: themeIdSchema.optional(),
     slides: z.array(slideSchema).min(1).max(60),
   })
   .refine((p) => new Set(p.slides.map((s) => s.id)).size === p.slides.length, { message: 'ID слайдов должны быть уникальными', path: ['slides'] })

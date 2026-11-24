@@ -24,7 +24,7 @@ export function EditorPage() {
   const { move, remove } = useSlideActions()
   const [activeField, setActiveField] = useState<string | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
-  const scenes = usePresentationScenes(presentation?.slides ?? [])
+  const scenes = usePresentationScenes(presentation?.slides ?? [], presentation?.themeId)
 
   // Клавиатура: ↑/↓ — слайды, Alt+↑/↓ — порядок, Delete — удалить, Ctrl+S — подсказка об автосохранении
   useEffect(() => {
@@ -78,7 +78,7 @@ export function EditorPage() {
 
   return (
     <div className="relative flex min-h-dvh flex-col bg-background lg:h-dvh lg:overflow-hidden">
-      <EditorHeader title={presentation.title} onTitleChange={setTitle} onBack={backToCreate} onExport={() => setExportOpen(true)} />
+      <EditorHeader title={presentation.title} showTemporaryTheme={!presentation.themeId} onTitleChange={setTitle} onBack={backToCreate} onExport={() => setExportOpen(true)} />
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[236px_minmax(0,1fr)_340px] lg:grid-rows-[minmax(0,1fr)] xl:grid-cols-[244px_minmax(0,1fr)_360px]">
         <div className="min-h-0 max-lg:order-2 lg:contents">
           <SlideRail slides={presentation.slides} scenes={scenes} selectedId={selected.id} />

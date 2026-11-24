@@ -105,12 +105,16 @@ def test_generate_rejects_invalid_or_contentless_sources(source):
         GenerateRequest.model_validate({"source": source, "slideCount": 6})
 
 
-def test_source_snapshot_survives_publish_and_is_used_for_revision_and_deleted(client, database):
+@pytest.mark.parametrize("theme_id", [None, "urfu"])
+def test_source_snapshot_survives_publish_and_is_used_for_revision_and_deleted(client, database, theme_id):
     from app.worker import execute_job
 
     _, csrf = register(client)
+    source_request = {"source": SOURCE, "slideCount": 6}
+    if theme_id is not None:
+        source_request["themeId"] = theme_id
     result = client.post(
-        "/api/v1/presentations", json={"source": SOURCE, "slideCount": 6},
+        "/api/v1/presentations", json=source_request,
         headers=headers(csrf, "source-generation"),
     )
     assert result.status_code == 202
@@ -121,6 +125,7 @@ def test_source_snapshot_survives_publish_and_is_used_for_revision_and_deleted(c
         assert snapshot["source"]["blocks"][1]["rows"][2] == ["Школы", "20", "35"]
     execute_job.run(job_id)
     current = client.get(f"/api/v1/presentations/{identifier}").json()
+    assert current["document"].get("themeId") == theme_id
     result = client.post(
         f"/api/v1/presentations/{identifier}/revisions",
         json={"instruction": "Уточни условия", "base_document_token": current["document_token"]},
@@ -131,6 +136,9 @@ def test_source_snapshot_survives_publish_and_is_used_for_revision_and_deleted(c
     with database() as db:
         assert db.get(Job, UUID(revision_id)).input_snapshot["source"] == snapshot["source"]
     execute_job.run(revision_id)
+    revised = client.get(f"/api/v1/presentations/{identifier}").json()
+    assert revised["document_token"] != current["document_token"]
+    assert revised["document"].get("themeId") == theme_id
     deleted = client.delete(f"/api/v1/presentations/{identifier}", headers=headers(csrf))
     assert deleted.status_code == 204
     with database() as db:

@@ -194,7 +194,9 @@ export const SlideRenderer = memo(function SlideRenderer({
           height: SLIDE_PX.height,
           transform: `scale(${scale})`,
           transformOrigin: '0 0',
-          background: scene.background,
+          backgroundColor: scene.background,
+          backgroundImage: scene.backgroundImage ? `url("${scene.backgroundImage}")` : undefined,
+          backgroundSize: '100% 100%',
         }}
       >
         {scene.elements.map((element, index) => {

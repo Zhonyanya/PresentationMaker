@@ -188,6 +188,29 @@ function statisticGroups(paragraphs: SceneParagraph[], ctx: RenderContext): Scen
   return context.overflow ? undefined : [...elements, context]
 }
 
+const percentageListIntro = /^(.{6,145}?(?::|\b(?:were|are|included)))\s+(.+)$/iu
+const percentageListItem = /^([\p{L}\p{M}\d '’‘«»–-]{2,42})\s*\((\d{1,3}(?:[.,]\d+)?[ \u00a0\u202f]*%)\)$/u
+
+function inlinePercentages(paragraphs: SceneParagraph[]) {
+  const [first, ...rest] = paragraphs
+  const sentence = firstSentence(first.text)
+  const match = sentence.replace(/\.$/u, '').match(percentageListIntro)
+  if (!match) return undefined
+  const [, intro, enumeration] = match
+  const items = enumeration.split(/,\s+(?:(?:and|и)\s+)?|\s+(?:and|и)\s+/i)
+  if (items.length < 2 || items.length > 3) return undefined
+  const metrics: { label: string; value: string }[] = []
+  for (const item of items) {
+    const entry = item.trim().match(percentageListItem)
+    if (!entry) return undefined
+    metrics.push({ label: entry[1].trim(), value: entry[2] })
+  }
+  if (new Set(metrics.map(({ label }) => label.toLowerCase())).size !== metrics.length) return undefined
+  const tail = first.text.slice(sentence.length).trim()
+  return { intro, metrics, details: tail ? [{ text: tail }, ...rest] : rest }
+}
+
+
 export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElement[] | undefined {
   const paragraphs = lines(slide.body)
   if (!paragraphs.length) return undefined
@@ -332,6 +355,30 @@ export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElem
         }
         break
       }
+      const percentages = slide.textStyle ? undefined : inlinePercentages(paragraphs)
+      if (percentages) {
+        const { intro, metrics, details } = percentages
+        const headingHeight = 0.72
+        const height = 1.85
+        const top = box.y + headingHeight + gap
+        const width = (box.w - gap * (metrics.length - 1)) / metrics.length
+        text([{ text: intro }], { ...box, h: headingHeight }, { valign: 'top' })
+        metrics.forEach(({ label, value }, index) => {
+          const x = box.x + index * (width + gap)
+          surface({ x, y: top, w: width, h: height })
+          surface({ x, y: top, w: width, h: 0.055 }, colors.accent)
+          const inner = inset({ x, y: top, w: width, h: height })
+          text([{ text: value }], { ...inner, h: 0.68 },
+            { heading: true, max: Math.min(40, typography.metricValue.max) })
+          text([{ text: label }], { ...inner, y: inner.y + 0.73, h: inner.h - 0.73 },
+            { valign: 'top' })
+        })
+        if (details.length) {
+          text(details, { ...box, y: top + height + gap, h: box.h - headingHeight - height - 2 * gap },
+            { valign: 'top' })
+        }
+        break
+      }
       const statistics = slide.textStyle ? undefined : statisticGroups(paragraphs, ctx)
       if (statistics) return statistics
       const [first, ...rest] = paragraphs
@@ -339,12 +386,27 @@ export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElem
       const remainingFirst = first.text.slice(lead.length).trim()
       const details = remainingFirst ? [{ text: remainingFirst }, ...rest] : rest
       if (lead.length > 185 || details.length > 4) return paragraphColumns(paragraphs, ctx)
-      if (ctx.sideLead && lead.length <= 110 && details.length
+      if (ctx.leadPlacement === 'side' && lead.length <= 110 && details.length
           && details.reduce((sum, item) => sum + item.text.length, 0) <= 320) {
         const highlight = { ...box, w: box.w * 0.40, h: box.h * 0.87 }
         surface(highlight, colors.primary)
         text([{ text: lead }], inset(highlight), { accent: true, max: 26 })
         text(details, inset({ ...box, x: box.x + highlight.w + gap, w: box.w - highlight.w - gap }))
+        break
+      }
+      if (ctx.leadPlacement === 'inline' || ctx.leadPlacement === 'side') {
+        const heading = [{ text: lead }]
+        const width = box.w - padding
+        const max = typography.heading.max
+        const height = Math.min(box.h * 0.48,
+          estimateTextHeight(heading, width, max, { lineSpacing: 1.04, paragraphSpacing: 0, bold: true }) + 0.18)
+        surface({ x: box.x, y: box.y, w: 0.055, h: height }, colors.accent)
+        text(heading, { x: box.x + padding, y: box.y, w: width, h: height },
+          { heading: true, max, valign: 'top' })
+        if (details.length) {
+          text(details, { ...box, x: box.x + padding, y: box.y + height + gap,
+            w: width, h: box.h - height - gap }, { valign: 'top' })
+        }
         break
       }
       const highlight = { ...box, h: details.length ? box.h * 0.4 : box.h * 0.58 }

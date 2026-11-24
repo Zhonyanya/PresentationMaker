@@ -17,8 +17,9 @@ from app.worker import call_ml
 def run_ml(monkeypatch):
     """Exercise the runner protocol without arming a timer in the pytest process."""
     timer = Mock()
-    monkeypatch.setattr(runner.signal, "signal", Mock())
-    monkeypatch.setattr(runner.signal, "setitimer", timer)
+    monkeypatch.setattr(
+        runner, "signal", SimpleNamespace(signal=Mock(), setitimer=timer, SIGALRM=14, ITIMER_REAL=0)
+    )
 
     def run(invoke, *, kind="generate", inputs=None):
         request = {
@@ -71,11 +72,34 @@ def test_runner_errors_are_public_and_timer_is_disarmed(run_ml, error, code):
         raise error
 
     output = run(invoke)
-    assert json.loads(output) == {
+    reply = json.loads(output)
+    reply.pop("diagnostic", None)
+    assert reply == {
         "error": {"code": code, "message": runner.PUBLIC_ERRORS[code]}
     }
     assert "private" not in output and "INTERNAL_SECRET" not in output
     assert timer.call_args_list[-1].args == (runner.signal.ITIMER_REAL, 0)
+
+
+@pytest.mark.parametrize(
+    ("adapter_result", "diagnostic"),
+    [
+        (json.JSONDecodeError("private parser detail", "private model response", 0),
+         "adapter_invalid_json"),
+        ({"slides": [], "private field": "private model response"}, "document_schema"),
+    ],
+)
+def test_runner_reports_only_a_safe_validation_reason(run_ml, adapter_result, diagnostic):
+    run, _ = run_ml
+
+    def invoke(*args):
+        if isinstance(adapter_result, Exception):
+            raise adapter_result
+        return adapter_result
+
+    output = run(invoke)
+    assert json.loads(output)["diagnostic"] == diagnostic
+    assert "private" not in output
 
 
 def test_runner_expired_deadline_never_calls_ml(run_ml):
@@ -135,18 +159,32 @@ def test_runner_enforces_revision_identity_without_explicit_targets(run_ml, docu
     assert document == before
 
 
-@pytest.mark.parametrize("outcome", ["success", "nonzero", "expired", "unknown", "invalid_json"])
-def test_parent_protocol_checks_reply_and_always_reaps_process(monkeypatch, document, outcome):
+@pytest.mark.parametrize(
+    "outcome", ["success", "nonzero", "expired", "unknown", "invalid_json", "diagnostic", "private",
+                "provider_transport", "provider_private"]
+)
+def test_parent_protocol_checks_reply_and_always_reaps_process(monkeypatch, document, outcome, caplog):
     from app import worker
 
     process = Mock(pid=12345, returncode=1 if outcome in {"nonzero", "expired"} else 0)
     start = Mock(return_value=process)
     reply = {"error": {"code": "PRIVATE_ERROR"}} if outcome == "unknown" else {"document": document}
+    if outcome in {"diagnostic", "private"}:
+        reply = {
+            "error": {"code": "INVALID_ML_RESPONSE"},
+            "diagnostic": "adapter_schema" if outcome == "diagnostic" else "private model data",
+        }
+    if outcome.startswith("provider_"):
+        reply = {
+            "error": {"code": "ML_PROVIDER_UNAVAILABLE"},
+            "diagnostic": "transport" if outcome == "provider_transport" else "private model data",
+        }
     exchange = Mock(return_value=b"{" if outcome == "invalid_json" else json.dumps(reply).encode())
     kill = Mock()
     monkeypatch.setattr(worker.subprocess, "Popen", start)
     monkeypatch.setattr(worker, "exchange", exchange)
-    monkeypatch.setattr(worker.os, "killpg", kill)
+    monkeypatch.setattr(worker.os, "killpg", kill, raising=False)
+    monkeypatch.setattr(worker, "signal", SimpleNamespace(SIGKILL=9))
     deadline = utcnow() + timedelta(seconds=-1 if outcome == "expired" else 60)
     if outcome == "success":
         assert call_ml("job", "attempt", "generate", {"slideCount": 8}, deadline) == document
@@ -156,15 +194,28 @@ def test_parent_protocol_checks_reply_and_always_reaps_process(monkeypatch, docu
     elif outcome == "expired":
         with pytest.raises(TimeoutError):
             call_ml("job", "attempt", "generate", {}, deadline)
+    elif outcome in {"diagnostic", "private"}:
+        with pytest.raises(AppError) as exc:
+            call_ml("job", "attempt", "generate", {}, deadline)
+        assert exc.value.code == "INVALID_ML_RESPONSE"
+        expected = "adapter_schema" if outcome == "diagnostic" else "unspecified"
+        assert f"ml_invalid_response job_id=job reason={expected}" in caplog.text
+        assert "private model data" not in caplog.text
     else:
         with pytest.raises(AppError) as exc:
             call_ml("job", "attempt", "generate", {}, deadline)
-        assert exc.value.code == "GENERATION_FAILED"
+        if outcome.startswith("provider_"):
+            assert exc.value.code == "ML_PROVIDER_UNAVAILABLE"
+            reason = "transport" if outcome == "provider_transport" else "unspecified"
+            assert f"code=ML_PROVIDER_UNAVAILABLE reason={reason}" in caplog.text
+            assert "private model data" not in caplog.text
+        else:
+            assert exc.value.code == "GENERATION_FAILED"
     assert start.call_args.kwargs["start_new_session"] is True
     payload = json.loads(exchange.call_args.args[1])
     assert payload["inputs"]["job_id"] == "job"
     assert payload["inputs"]["deadline"] == deadline.isoformat()
-    kill.assert_called_once_with(process.pid, runner.signal.SIGKILL)
+    kill.assert_called_once_with(process.pid, worker.signal.SIGKILL)
     process.stdin.close.assert_called_once()
     process.stdout.close.assert_called_once()
     process.wait.assert_called_once()

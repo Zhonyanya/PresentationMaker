@@ -21,6 +21,7 @@ from app.core.process import exchange
 from app.db.engine import sync_sessions
 from app.db.models import Job, Presentation, Session, utcnow
 from app.jobs.service import ACTIVE
+from app.ml.errors import PROVIDER_FAILURE_REASONS, PUBLIC_ERRORS
 from app.presentations.schemas import normalize_document, validate_revision
 
 logger = logging.getLogger(__name__)
@@ -220,6 +221,9 @@ def call_ml(identifier, attempt, kind, snapshot, deadline):
     # Контракт ML обещает deadline в UTC; psycopg возвращает время в часовом поясе сессии БД
     deadline = deadline.astimezone(UTC)
     inputs = dict(snapshot, job_id=str(identifier), deadline=deadline.isoformat())
+    inputs.pop("themeId", None)
+    if kind == "revise" and "document" in inputs:
+        inputs["document"] = {key: value for key, value in inputs["document"].items() if key != "themeId"}
     payload = json.dumps({"kind": kind, "inputs": inputs}, ensure_ascii=False).encode()
     parent_read, parent_write = os.pipe()
     try:
@@ -270,17 +274,22 @@ def call_ml(identifier, attempt, kind, snapshot, deadline):
             raise AppError(502, "GENERATION_FAILED", "ML-процесс завершился с ошибкой.")
         reply = json.loads(stdout)
         if "error" in reply:
-            messages = {
-                "ML_UNAVAILABLE": "ML-модуль недоступен.",
-                "ML_CAPABILITY_UNAVAILABLE": "ML не поддерживает эту операцию.",
-                "INVALID_ML_RESPONSE": "ML вернул документ неверного формата.",
-                "GENERATION_FAILED": "Ошибка выполнения ML.",
-                "NO_TABLE_COMPARISONS": "В таблицах нет распознанных сравнений по периодам.",
-            }
             code = reply["error"]["code"]
-            if code not in messages:
+            if code not in PUBLIC_ERRORS:
                 raise ValueError("Unknown subprocess error")
-            raise AppError(502, code, messages[code])
+            if code == "INVALID_ML_RESPONSE":
+                diagnostic = reply.get("diagnostic")
+                if diagnostic not in (
+                    "adapter_invalid_json", "adapter_schema", "adapter_invalid_value",
+                    "document_invalid_json", "document_schema", "document_invalid_value",
+                ):
+                    diagnostic = "unspecified"
+                logger.warning("ml_invalid_response job_id=%s reason=%s", identifier, diagnostic)
+            elif code.startswith("ML_PROVIDER_"):
+                diagnostic = reply.get("diagnostic")
+                reason = diagnostic if isinstance(diagnostic, str) and diagnostic in PROVIDER_FAILURE_REASONS else "unspecified"
+                logger.warning("ml_provider_failure job_id=%s code=%s reason=%s", identifier, code, reason)
+            raise AppError(502, code, PUBLIC_ERRORS[code])
         return reply["document"]
     finally:
         os.close(parent_write)
@@ -407,6 +416,10 @@ def execute_job(identifier: str):
         document = normalize_document(
             result, generation=kind == "generate", max_bytes=settings.max_ml_bytes
         )
+        document.pop("themeId", None)
+        theme_id = snapshot.get("themeId") if kind == "generate" else snapshot["document"].get("themeId")
+        if theme_id is not None:
+            document["themeId"] = theme_id
         if kind == "revise":
             validate_revision(snapshot["document"], document, snapshot.get("target_slide_ids"))
         if not advance_phase(identifier, attempt, "saving"):

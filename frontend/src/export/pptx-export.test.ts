@@ -177,6 +177,7 @@ it('preserves the aspect ratio of a portrait PNG crop', async () => {
   const picture = xml.match(/<p:pic>.*?<\/p:pic>/s)?.[0]
   const [, width, height] = picture?.match(/<a:ext cx="(\d+)" cy="(\d+)"/) ?? []
   expect(Number(width) / Number(height)).toBeCloseTo(0.5)
+  expect(Number(height) / 914400).toBeCloseTo(4.65)
   expect(xml).toContain('<a:t>Охват вырос на 9 процентных пунктов.</a:t>')
 })
 

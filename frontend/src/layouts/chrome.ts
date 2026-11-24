@@ -83,7 +83,10 @@ export function contentChrome(title: string, ctx: RenderContext): SceneElement[]
   const footerY = spacing.contentBottom + 0.3
 
   const elements: SceneElement[] = [
-    { type: 'rect', fill: colors.accent, box: { x: spacing.marginX, y: spacing.headingTop - 0.14, w: 0.55, h: 0.06 } },
+    ...(theme.artwork ? [] : [{
+      type: 'rect' as const, fill: colors.accent,
+      box: { x: spacing.marginX, y: spacing.headingTop - 0.14, w: 0.55, h: 0.06 },
+    }]),
     fittedText({
       field: 'title',
       floor: typography.absoluteMinFontSize + 5,

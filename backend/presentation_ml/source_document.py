@@ -28,11 +28,49 @@ class Evidence:
     related_block_id: str | None = None
 
 
+def _pipe_cells(line: str) -> tuple[str, ...]:
+    line = line.strip()
+    if not line.startswith('|') or not line.endswith('|') or r'\|' in line:
+        return ()
+    return tuple(cell.strip() for cell in line[1:-1].split('|'))
+
+
 def text_blocks(text: str) -> SourceDocument:
-    paragraphs = (part.strip() for part in re.split(r'\r?\n[ \t]*\r?\n', text))
-    return SourceDocument(tuple(
-        TextBlock(f'text-{index}', part) for index, part in enumerate(paragraphs, 1) if part
-    ))
+    blocks = []
+    for index, paragraph in enumerate(re.split(r'\r?\n[ \t]*\r?\n', text), 1):
+        lines = paragraph.strip().splitlines()
+        pending = []
+        cursor = 0
+        while cursor < len(lines):
+            header = _pipe_cells(lines[cursor])
+            separator = _pipe_cells(lines[cursor + 1]) if cursor + 1 < len(lines) else ()
+            if (len(header) < 2 or not all(header) or len(separator) != len(header)
+                    or not all(re.fullmatch(r':?-{3,}:?', cell) for cell in separator)):
+                pending.append(lines[cursor])
+                cursor += 1
+                continue
+
+            stop = cursor + 2
+            rows = [header]
+            while stop < len(lines):
+                cells = _pipe_cells(lines[stop])
+                if len(cells) != len(header):
+                    break
+                rows.append(cells)
+                stop += 1
+            if len(rows) == 1:
+                pending.append(lines[cursor])
+                cursor += 1
+                continue
+
+            if pending:
+                blocks.append(TextBlock(f'text-{index}-{cursor}', '\n'.join(pending)))
+                pending.clear()
+            blocks.append(TableBlock(f'table-{index}-{cursor}', tuple(rows)))
+            cursor = stop
+        if pending:
+            blocks.append(TextBlock(f'text-{index}', '\n'.join(pending)))
+    return SourceDocument(tuple(blocks))
 
 
 _REVIEW_HEADINGS = {

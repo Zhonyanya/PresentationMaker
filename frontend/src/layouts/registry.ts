@@ -30,13 +30,18 @@ export function getLayout<L extends SlideLayout>(layout: L): LayoutDefinition<L>
 
 export function buildSlideScene(slide: Slide, ctx: RenderContext): SlideScene {
   const definition = getLayout(slide.layout) as LayoutDefinition<typeof slide.layout>
-  return (definition.buildScene as (s: SlideOf<typeof slide.layout>, c: RenderContext) => SlideScene)(slide, ctx)
+  const scene = (definition.buildScene as (s: SlideOf<typeof slide.layout>, c: RenderContext) => SlideScene)(slide, ctx)
+  const artwork = ctx.theme.artwork
+  if (!artwork) return scene
+  const isCover = slide.layout === 'title' || slide.layout === 'closing'
+  return { ...scene, backgroundImage: isCover ? artwork.cover : artwork.content }
 }
 
 /** Контекст рендера для каждого слайда: номер, общий счётчик, номер раздела. */
 export function buildRenderContexts(slides: Slide[], theme: PresentationTheme): RenderContext[] {
   let section = 0
   let consecutiveLeads = 0
+  const leadPlacements = ['top', 'side', 'inline'] as const
   return slides.map((slide, index) => {
     if (slide.layout === 'section') section += 1
     const isLead = slide.layout === 'text' && slide.body.trim() && !slide.sourceMaterial && !slide.composition
@@ -44,7 +49,7 @@ export function buildRenderContexts(slides: Slide[], theme: PresentationTheme): 
     consecutiveLeads = isLead ? consecutiveLeads + 1 : 0
     return {
       theme, number: index + 1, total: slides.length, sectionNumber: Math.max(section, 1),
-      sideLead: consecutiveLeads > 0 && consecutiveLeads % 2 === 0,
+      leadPlacement: isLead ? leadPlacements[(consecutiveLeads - 1) % leadPlacements.length] : undefined,
     }
   })
 }

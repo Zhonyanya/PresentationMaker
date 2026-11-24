@@ -87,7 +87,7 @@ class TitleSlide(SlideBase):
 
 class SourceTableMaterial(Contract):
     kind: Literal["table"]
-    page: Annotated[int, Field(ge=1, le=250)]
+    page: Annotated[int, Field(ge=1, le=250)] | None = None
     rows: Annotated[
         list[Annotated[list[text(300)], Field(min_length=2, max_length=8)]],
         Field(min_length=2, max_length=10),
@@ -202,10 +202,14 @@ Slide = Annotated[
 ]
 
 
+ThemeId = Literal["urfu"]
+
+
 class Document(Contract):
     """Полный документ шести допустимых макетов, общий для хранения и браузерного вывода."""
 
     title: text(200)
+    themeId: ThemeId | None = None
     slides: Annotated[list[Slide], Field(min_length=1, max_length=60)]
 
 
@@ -219,14 +223,14 @@ class GenerateRequest(Contract):
     text: ReportText | None = None
     source: SourceInput | None = None
     mode: Literal["comparisons"] | None = None
+    themeId: ThemeId | None = None
     slideCount: Annotated[int, Field(ge=3, le=20)]
 
     @model_validator(mode="before")
     @classmethod
-    def optional_title_not_null(cls, value):
-        """Разрешает отсутствие title, но отклоняет явный null, как исходная Zod-схема."""
-        if isinstance(value, dict) and "title" in value and value["title"] is None:
-            raise ValueError("Optional title must be absent, not null")
+    def optional_settings_not_null(cls, value):
+        if isinstance(value, dict) and any(key in value and value[key] is None for key in ("title", "themeId")):
+            raise ValueError("Optional settings must be absent, not null")
         return value
 
     @model_validator(mode="after")
