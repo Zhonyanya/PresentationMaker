@@ -6,6 +6,7 @@ import { usePresentationScenes } from '@/hooks/usePresentationScenes'
 import { EditorHeader } from './EditorHeader'
 import { SlideRail } from './SlideRail'
 import { SlideCanvas } from './SlideCanvas'
+import { themeFor } from '@/theme/presentation-theme'
 import { Inspector } from './Inspector'
 import { ExportDialog } from './ExportDialog'
 import { useSlideActions } from './useSlideActions'
@@ -24,7 +25,7 @@ export function EditorPage() {
   const { move, remove } = useSlideActions()
   const [activeField, setActiveField] = useState<string | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
-  const scenes = usePresentationScenes(presentation?.slides ?? [])
+  const scenes = usePresentationScenes(presentation?.slides ?? [], presentation?.brandbook)
 
   // Клавиатура: ↑/↓ — слайды, Alt+↑/↓ — порядок, Delete — удалить, Ctrl+S — подсказка об автосохранении
   useEffect(() => {
@@ -78,7 +79,7 @@ export function EditorPage() {
 
   return (
     <div className="relative flex min-h-dvh flex-col bg-background lg:h-dvh lg:overflow-hidden">
-      <EditorHeader title={presentation.title} onTitleChange={setTitle} onBack={backToCreate} onExport={() => setExportOpen(true)} />
+      <EditorHeader brandbookName={presentation.brandbook?.name} title={presentation.title} onTitleChange={setTitle} onBack={backToCreate} onExport={() => setExportOpen(true)} />
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[236px_minmax(0,1fr)_340px] lg:grid-rows-[minmax(0,1fr)] xl:grid-cols-[244px_minmax(0,1fr)_360px]">
         <div className="min-h-0 max-lg:order-2 lg:contents">
           <SlideRail slides={presentation.slides} scenes={scenes} selectedId={selected.id} />
@@ -87,7 +88,7 @@ export function EditorPage() {
           <SlideCanvas slide={selected} scene={scenes[index]} index={index} total={presentation.slides.length} activeField={activeField} />
         </div>
         <div className="min-h-0 max-lg:order-3 lg:contents">
-          <Inspector slide={selected} index={index} total={presentation.slides.length} onFocusField={setActiveField} />
+          <Inspector colors={themeFor(presentation.brandbook).colors} slide={selected} index={index} total={presentation.slides.length} onFocusField={setActiveField} />
         </div>
       </div>
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} presentation={presentation} scenes={scenes} />

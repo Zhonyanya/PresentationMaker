@@ -10,6 +10,17 @@ import { toFileName } from '@/export/pptx-export'
 const bytes = (...values: number[]) => new Uint8Array(values).buffer
 
 describe('импорт файлов', () => {
+  it.each([['page.html', 'text/html'], ['table.csv', 'text/csv'], ['report.bin', 'application/pdf']])(
+    'отклоняет неподдерживаемое расширение %s независимо от MIME',
+    async (name, type) => {
+      await expect(readSourceFile(new File(['text'], name, { type }))).rejects.toThrow('Поддерживаются файлы')
+    },
+  )
+
+  it('принимает Markdown с расширением в верхнем регистре и без MIME', async () => {
+    await expect(readSourceFile(new File(['# Доклад'], 'отчёт.MD'))).resolves.toEqual({ text: '# Доклад', pagesWithoutText: [] })
+  })
+
   it('распознаёт UTF-16 с BOM («Юникод» Блокнота)', () => {
     const utf16 = new Uint8Array([0xff, 0xfe, ...Array.from('Привет', (c) => [c.charCodeAt(0) & 0xff, c.charCodeAt(0) >> 8]).flat()])
     expect(decodeText(utf16.buffer)).toBe('Привет')

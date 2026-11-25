@@ -5,8 +5,7 @@ import { buildPptx, toFileName } from './pptx-export'
 
 async function exportToZip(includeNotes = true) {
   const pptx = await buildPptx(samplePresentation(), { includeNotes })
-  const buffer = (await pptx.write({ outputType: 'nodebuffer' })) as Buffer
-  return JSZip.loadAsync(buffer)
+  return JSZip.loadAsync(pptx)
 }
 
 const slideXml = (zip: JSZip, n: number) => zip.file(`ppt/slides/slide${n}.xml`)!.async('string')
@@ -45,6 +44,19 @@ describe('экспорт в PPTX', () => {
     expect(xml).toContain('typeface="Arial"')
   })
 
+  it('применяет брендбук сохранённого документа при обычном экспорте', async () => {
+    const brandbook = { name: 'Тема', primary: '#663366', accent: '#CC4422', headingFont: 'Georgia' }
+    const pptx = await buildPptx({ ...samplePresentation(), brandbook })
+    const zip = await JSZip.loadAsync(pptx)
+    const theme = await zip.file('ppt/theme/theme1.xml')!.async('string')
+    expect(theme).toContain('<a:accent1><a:srgbClr val="663366"/></a:accent1>')
+    expect(theme).toContain('<a:accent2><a:srgbClr val="CC4422"/></a:accent2>')
+    const xml = await slideXml(zip, 1)
+    expect(xml).toContain('663366')
+    expect(xml).toContain('CC4422')
+    expect(xml).toContain('typeface="Georgia"')
+  })
+
   it('заметки докладчика — по выбору', async () => {
     const withNotes = await exportToZip(true)
     const notes = await Promise.all(Object.keys(withNotes.files).filter((f) => /notesSlide\d+\.xml$/.test(f)).map((f) => withNotes.file(f)!.async('string')))
@@ -64,7 +76,7 @@ describe('экспорт в PPTX', () => {
     const presentation = samplePresentation()
     presentation.slides[3] = { ...presentation.slides[3], bullets: ['Мягкий\u000bперенос', 'Символ\u0001внутри'], notes: 'Заметка\u000cстраница' } as never
     const pptx = await buildPptx(presentation)
-    const zip = await JSZip.loadAsync((await pptx.write({ outputType: 'nodebuffer' })) as Buffer)
+    const zip = await JSZip.loadAsync(pptx)
     const files = await Promise.all(Object.keys(zip.files).filter((f) => f.endsWith('.xml')).map((f) => zip.file(f)!.async('string')))
     for (const xml of files) expect(xml).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/)
     expect(await slideXml(zip, 4)).toContain('Символвнутри')

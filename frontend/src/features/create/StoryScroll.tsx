@@ -4,6 +4,7 @@ import { SLIDE_PX, SlideRenderer } from '@/features/slides/SlideRenderer'
 import { useElementSize } from '@/hooks/useElementSize'
 import { demoExamples } from '@/data/demo-examples'
 import { plural } from '@/lib/utils'
+import { countWords } from '@/lib/text'
 import type { SlideScene } from '@/layouts/scene'
 import { getShowcase } from './showcase'
 
@@ -18,6 +19,7 @@ import { getShowcase } from './showcase'
 
 const PAPER = '#f3f0e8'
 const INK = '#141414'
+const reportWordCount = countWords(demoExamples[0].text)
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v))
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t
@@ -57,7 +59,7 @@ function DocumentSheet({ progress, lines }: { progress: MotionValue<number>; lin
       style={{ x, y, scale, rotate, opacity }}
       className="absolute top-1/2 left-1/2 -mt-[min(36vh,300px)] -ml-[min(22vw,210px)] h-[min(72vh,600px)] w-[min(44vw,420px)] overflow-hidden bg-[#fbfaf6] p-[min(3vw,34px)] shadow-[0_2px_4px_rgb(20_20_20/0.06),0_40px_80px_-30px_rgb(20_20_20/0.45)]"
     >
-      <p className="eyebrow mb-3">Доклад · {lines.length * 12} слов</p>
+      <p className="eyebrow mb-3">Доклад · {reportWordCount} {plural(reportWordCount, ['слово', 'слова', 'слов'])}</p>
       <p className="mb-5 font-display text-[clamp(1.2rem,2vw,1.6rem)] leading-tight">Итоги учебного года</p>
       <div className="flex flex-col gap-[0.42rem] text-[clamp(9px,0.85vw,11.5px)] leading-[1.55] text-foreground/75">
         {lines.map((line, i) => {

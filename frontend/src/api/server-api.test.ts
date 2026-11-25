@@ -14,7 +14,7 @@ describe('серверный контракт v1', () => {
     const value = presentationSchema.parse(document)
     const before = JSON.stringify(value)
     const pptx = await buildPptx(value, { includeNotes: true })
-    const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+    const zip = await JSZip.loadAsync(pptx)
     for (let n = 1; n <= 6; n++) {
       const xml = await zip.file(`ppt/slides/slide${n}.xml`)!.async('string')
       expect(xml).toContain('<p:txBody>')

@@ -1,10 +1,15 @@
 /**
  * Чтение исходного текста из файла прямо в браузере.
- * TXT — с автоопределением кодировки (UTF-8 / Windows-1251),
- * DOCX — через mammoth, с сохранением заголовков и списков.
+ * TXT/MD — с автоопределением кодировки, DOCX — с заголовками и списками,
+ * PDF — из текстового слоя документа.
  */
 
-export const ACCEPTED_FILE_TYPES = '.txt,.md,.docx,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+import { LIMITS } from '@/domain/presentation'
+import { sanitizeText } from './text'
+
+const SOURCE_EXTENSIONS = ['.txt', '.md', '.docx', '.pdf']
+export const SOURCE_FORMATS = SOURCE_EXTENSIONS.join(', ')
+export const ACCEPTED_FILE_TYPES = SOURCE_EXTENSIONS.join(',')
 const MAX_FILE_SIZE = 10 * 1024 * 1024
 /**
  * Предел распакованного содержимого DOCX без картинок. Сжатый файл в пару мегабайт
@@ -16,22 +21,22 @@ const UNREADABLE = 'Не удалось прочитать документ. П�
 
 export class FileImportError extends Error {}
 
-import { sanitizeText } from './text'
-
-export async function readSourceFile(file: File): Promise<string> {
-  return sanitizeText(await readRaw(file))
-}
-
-async function readRaw(file: File): Promise<string> {
+export async function readSourceFile(file: File): Promise<{ text: string; pagesWithoutText: number[] }> {
   if (file.size > MAX_FILE_SIZE) throw new FileImportError('Файл больше 10 МБ. Вставьте нужный фрагмент текста вручную.')
   const name = file.name.toLowerCase()
 
-  if (name.endsWith('.docx')) return readDocx(file)
+  if (name.endsWith('.pdf')) {
+    const { withPdf, pdfText } = await import('./pdf-import')
+    const { text, pagesWithoutText } = await withPdf(file, (pdf) => pdfText(pdf, LIMITS.sourceTextMax + 1))
+    if (!text.trim()) throw new FileImportError('В PDF нет текстового слоя. Для скана сначала распознайте текст.')
+    return { text: sanitizeText(text), pagesWithoutText }
+  }
   if (name.endsWith('.doc')) {
     throw new FileImportError('Старый формат .doc не поддерживается. Сохраните документ как .docx или скопируйте текст.')
   }
-  if (name.endsWith('.txt') || name.endsWith('.md') || file.type.startsWith('text/')) return readText(file)
-  throw new FileImportError('Поддерживаются файлы .txt, .md и .docx.')
+  if (!SOURCE_EXTENSIONS.some((ext) => name.endsWith(ext))) throw new FileImportError(`Поддерживаются файлы ${SOURCE_FORMATS}.`)
+  const text = name.endsWith('.docx') ? await readDocx(file) : await readText(file)
+  return { text: sanitizeText(text), pagesWithoutText: [] }
 }
 
 /** Расшифровывает текстовый файл: UTF-8, UTF-16 с BOM или Windows-1251. */
@@ -107,7 +112,7 @@ async function assertUnpackedSize(buffer: ArrayBuffer) {
 }
 
 /** Часть публичного API JSZip, не описанная в его типах */
-interface StreamableEntry {
+export interface StreamableEntry {
   internalStream(type: 'uint8array'): {
     on(event: 'data', listener: (chunk: Uint8Array) => void): unknown
     on(event: 'error', listener: (error: Error) => void): unknown
@@ -118,7 +123,7 @@ interface StreamableEntry {
 }
 
 /** Сколько байт даёт распаковка части архива — не больше budget + один фрагмент. */
-function inflatedSize(entry: StreamableEntry, budget: number): Promise<number> {
+export function inflatedSize(entry: StreamableEntry, budget: number): Promise<number> {
   return new Promise((resolve, reject) => {
     let size = 0
     const stream = entry.internalStream('uint8array')

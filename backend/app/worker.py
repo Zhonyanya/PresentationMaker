@@ -220,6 +220,8 @@ def call_ml(identifier, attempt, kind, snapshot, deadline):
     # Контракт ML обещает deadline в UTC; psycopg возвращает время в часовом поясе сессии БД
     deadline = deadline.astimezone(UTC)
     inputs = dict(snapshot, job_id=str(identifier), deadline=deadline.isoformat())
+    # Оформление принадлежит документу и не входит в контракт ML.
+    inputs.pop("brandbook", None)
     payload = json.dumps({"kind": kind, "inputs": inputs}, ensure_ascii=False).encode()
     parent_read, parent_write = os.pipe()
     try:
@@ -347,6 +349,8 @@ def publish_result(identifier, attempt, document):
             job.input_snapshot = {}
             return False
         limit_transaction(db, job.deadline_at)
+        if brandbook := job.input_snapshot.get("brandbook"):
+            document = {**document, "brandbook": brandbook}
         presentation.document = document
         presentation.document_token = secrets.token_urlsafe(32)
         presentation.source_text = job.input_snapshot["text"]

@@ -11,3 +11,7 @@ export function sanitizeText(value: string): string {
   // Мягкий перенос Word и разрыв страницы превращаем в обычный перенос строки
   return value.replace(/[\u000b\u000c]/g, '\n').replace(INVALID_XML_CHARS, '').replace(UNPAIRED_SURROGATES, '')
 }
+
+export function countWords(value: string): number {
+  return value.split(/\s+/).filter((word) => /[\p{L}\p{N}]/u.test(word)).length
+}

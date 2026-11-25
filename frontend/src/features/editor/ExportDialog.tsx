@@ -8,6 +8,7 @@ import type { SlideScene } from '@/layouts/scene'
 import { sceneHasOverflow } from '@/hooks/usePresentationScenes'
 import { downloadPptx, toFileName } from '@/export/pptx-export'
 import { presentationTheme } from '@/theme/presentation-theme'
+import { env } from '@/config/env'
 import { plural } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -142,11 +143,11 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
             {[
               ['Слайдов', String(count)],
               ['Формат', '16:9'],
-              ['Оформление', presentationTheme.isOfficial ? presentationTheme.name : 'Временное'],
+              ['Оформление', presentation.brandbook?.name ?? (presentationTheme.isOfficial ? presentationTheme.name : 'Временное')],
             ].map(([term, value]) => (
               <div key={term} className="flex flex-col gap-1.5 border-l border-border pl-4 first:border-l-0 first:pl-0">
                 <dt className="eyebrow !text-[10px]">{term}</dt>
-                <dd className="font-display text-[22px] leading-none">{value}</dd>
+                <dd className="break-words font-display text-[22px] leading-none">{value}</dd>
               </div>
             ))}
           </dl>
@@ -157,7 +158,7 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
                 <TriangleAlert className="size-4" aria-hidden />
                 Слишком много текста на {problems.length} {plural(problems.length, ['слайде', 'слайдах', 'слайдах'])}
               </p>
-              <p className="mt-1 text-muted-foreground">Файл можно скачать, но шрифт будет мелким, а при очень большом объёме часть текста может не поместиться. Проверьте эти слайды или разделите их.</p>
+              <p className="mt-1 text-muted-foreground">Файл можно скачать, но шрифт будет мелким, а при очень большом объёме часть текста может не поместиться. {env.apiMode === 'http' ? 'Попросите сократить текст командой в редакторе.' : 'Проверьте эти слайды или разделите их.'}</p>
               <ul className="mt-2 flex flex-wrap gap-1.5">
                 {problems.map(({ slide, index }) => (
                   <li key={slide.id}>

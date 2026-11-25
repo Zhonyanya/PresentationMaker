@@ -2,7 +2,7 @@ import type PptxGenJS from 'pptxgenjs'
 import type { Presentation } from '@/domain/presentation'
 import { buildPresentationScenes } from '@/layouts/registry'
 import type { SceneElement, SceneText } from '@/layouts/scene'
-import { presentationTheme, type PresentationTheme } from '@/theme/presentation-theme'
+import { themeFor, type PresentationTheme } from '@/theme/presentation-theme'
 import { sanitizeText } from '@/lib/text'
 
 /**
@@ -77,8 +77,8 @@ function addElement(pptx: PptxGenJS, slide: PptxSlide, element: SceneElement) {
   }
 }
 
-export async function buildPptx(presentation: Presentation, options: ExportOptions = {}): Promise<PptxGenJS> {
-  const theme = options.theme ?? presentationTheme
+export async function buildPptx(presentation: Presentation, options: ExportOptions = {}): Promise<ArrayBuffer> {
+  const theme = options.theme ?? themeFor(presentation.brandbook)
   const includeNotes = options.includeNotes ?? true
   const { default: PptxGenJSClass } = await import('pptxgenjs')
   const pptx = new PptxGenJSClass()
@@ -98,7 +98,18 @@ export async function buildPptx(presentation: Presentation, options: ExportOptio
     scene.elements.forEach((element) => addElement(pptx, slide, element))
     if (includeNotes && slideData.notes?.trim()) slide.addNotes(sanitizeText(slideData.notes.trim()))
   })
-  return pptx
+  const branded = Boolean(presentation.brandbook || options.theme)
+  const bytes = await pptx.write({ outputType: 'arraybuffer', compression: !branded }) as ArrayBuffer
+  if (!branded) return bytes
+
+  // PptxGenJS позволяет задать шрифты темы, но записывает фиксированную палитру Office.
+  const { default: JSZip } = await import('jszip')
+  const zip = await JSZip.loadAsync(bytes)
+  const themePath = 'ppt/theme/theme1.xml'
+  const xml = await zip.file(themePath)!.async('string')
+  zip.file(themePath, xml.replace(/(<a:accent([12])><a:srgbClr val=")[0-9a-f]{6}/gi,
+    (_, prefix: string, slot: string) => prefix + hex(slot === '1' ? theme.colors.primary : theme.colors.accent)))
+  return zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' })
 }
 
 /** Безопасное имя файла из названия презентации */
@@ -116,8 +127,19 @@ export function toFileName(title: string): string {
 
 /** Собирает PPTX и запускает скачивание в браузере. Возвращает имя файла. */
 export async function downloadPptx(presentation: Presentation, fileName: string, options: ExportOptions = {}): Promise<string> {
-  const pptx = await buildPptx(presentation, options)
+  const bytes = await buildPptx(presentation, options)
   const name = toFileName(fileName.replace(/\.pptx$/i, ''))
-  await pptx.writeFile({ fileName: name, compression: true })
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  document.body.append(link)
+  try {
+    link.click()
+  } finally {
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
   return name
 }

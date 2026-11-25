@@ -39,6 +39,11 @@ export default defineConfig(({ mode }) => {
       // Основной бандл ~850 КБ (~270 КБ в gzip): React, Radix, motion, dnd-kit, Zod.
       // PptxGenJS и mammoth подгружаются динамически, только при экспорте и импорте DOCX.
       chunkSizeWarningLimit: 900,
+      // nginx отдаёт .js с нужным MIME для модульного worker PDF.js.
+      rollupOptions: { output: {
+        assetFileNames: (asset) => asset.names.includes('pdf.worker.min.mjs')
+          ? 'assets/[name]-[hash].js' : 'assets/[name]-[hash][extname]',
+      } },
     },
     test: {
       environment: 'node',

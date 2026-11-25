@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
+import { brandbookSchema, type Brandbook } from '@/domain/brandbook'
 import { z } from 'zod'
 import { ApiError, presentationApi, type GenerationStageId } from '@/api'
 import { toApiError } from '@/api/errors'
@@ -11,6 +12,7 @@ import { useEditorStore } from './editor-store'
 export type View = 'create' | 'generating' | 'editor'
 
 export interface SourceDraft {
+  brandbook?: Brandbook
   text: string
   title: string
   slideCount: number
@@ -40,6 +42,7 @@ const idleGeneration: GenerationState = { status: 'idle', stage: null, completed
 const emptyDraft: SourceDraft = { text: '', title: '', slideCount: LIMITS.slideCountDefault }
 
 const persistedDraftSchema = z.object({
+  brandbook: brandbookSchema.optional(),
   text: z.string(),
   title: z.string(),
   slideCount: z.number().int().min(LIMITS.slideCountMin).max(LIMITS.slideCountMax),
@@ -63,6 +66,7 @@ export const useFlowStore = create<FlowState>()(
         controller = current
         const { draft } = get()
         const request: GenerateRequest = {
+          brandbook: draft.brandbook,
           text: draft.text,
           title: draft.title.trim() || undefined,
           slideCount: draft.slideCount,

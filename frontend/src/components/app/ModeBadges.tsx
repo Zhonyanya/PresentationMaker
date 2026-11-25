@@ -41,7 +41,7 @@ export function useMlStub(): boolean {
 const badgeTrigger = 'cursor-help outline-none focus-visible:ring-2 focus-visible:ring-ring/40'
 
 /** Честные пометки: демо-режим или заглушка ML и временная тема оформления. */
-export function ModeBadges({ showTheme = true }: { showTheme?: boolean }) {
+export function ModeBadges({ brandbookName }: { brandbookName?: string }) {
   const stub = useMlStub()
   return (
     <div className="flex items-center gap-1.5">
@@ -73,15 +73,15 @@ export function ModeBadges({ showTheme = true }: { showTheme?: boolean }) {
           </TooltipContent>
         </Tooltip>
       )}
-      {showTheme && !presentationTheme.isOfficial && (
+      {(brandbookName || !presentationTheme.isOfficial) && (
         <Tooltip>
           <TooltipTrigger asChild>
             <Badge variant="outline" tabIndex={0} className={`${badgeTrigger} max-lg:hidden`}>
-              Временная тема
+              {brandbookName ? 'Брендбук' : 'Временная тема'}
             </Badge>
           </TooltipTrigger>
           <TooltipContent>
-            Оформление слайдов временное и не является официальным брендбуком. Его заменят, когда будет утверждён шаблон.
+            {brandbookName ? `Оформление слайдов из брендбука «${brandbookName}».` : 'По умолчанию используется временная тема. Свой брендбук можно добавить в форме создания.'}
           </TooltipContent>
         </Tooltip>
       )}

@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { AppHeader } from '@/components/app/AppHeader'
 import { EASE_OUT_EXPO, fadeUp, lineReveal, stagger } from '@/components/app/motion'
+import { BrandbookField } from './BrandbookField'
 import { SourceTextField } from './SourceTextField'
 import { SlideCountField } from './SlideCountField'
 import { ExampleList } from './ExampleList'
@@ -87,6 +88,9 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
   const savedPresentation = useEditorStore((s) => s.presentation)
   const savedAt = useEditorStore((s) => s.savedAt)
   const closeEditor = useEditorStore((s) => s.close)
+  const [brandbookLoading, setBrandbookLoading] = useState(false)
+  const [sourceLoading, setSourceLoading] = useState(false)
+  const importing = sourceLoading || brandbookLoading
   const [errors, setErrors] = useState<FieldErrors>({})
 
   // Параллакс обложки: заголовок уходит вверх быстрее колоды — появляется глубина
@@ -101,7 +105,9 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault()
+    if (importing) return
     const result = generateRequestSchema.safeParse({
+      brandbook: draft.brandbook,
       text: draft.text,
       title: draft.title.trim() || undefined,
       slideCount: draft.slideCount,
@@ -301,6 +307,8 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
               <SourceTextField
                 id={textId}
                 value={draft.text}
+                loading={sourceLoading}
+                onLoading={setSourceLoading}
                 onChange={(text) => {
                   setDraft({ text })
                   if (errors.text) setErrors((e) => ({ ...e, text: undefined }))
@@ -310,12 +318,14 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
                 onShowExamples={showExamples}
               />
 
+              <BrandbookField value={draft.brandbook} onChange={(brandbook) => setDraft({ brandbook })} loading={brandbookLoading} onLoading={setBrandbookLoading} />
+
               <div className="flex flex-col-reverse gap-4 border-t border-border pt-6 sm:flex-row sm:items-center sm:justify-between">
                 <p className="hidden text-xs text-muted-foreground sm:block">
                   <kbd className="font-sans font-medium text-foreground">Ctrl + Enter</kbd> — создать, не отрывая рук от клавиатуры
                 </p>
                 <Magnetic className="w-full sm:w-auto">
-                  <Button type="submit" size="xl" className="group w-full sm:w-auto">
+                  <Button type="submit" disabled={importing} size="xl" className="group w-full sm:w-auto">
                     Создать презентацию
                     <ArrowRight className="transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:translate-x-1" />
                   </Button>
@@ -373,7 +383,7 @@ export function CreatePage({ onGenerate, onOpenCurrent, onDiscardCurrent, server
       <footer className="border-t border-border">
         <div className="mx-auto flex w-full max-w-[1280px] flex-wrap items-center justify-between gap-3 px-5 py-6 sm:px-8">
           <span className="font-display text-[15px] italic text-muted-foreground">Презентатор</span>
-          <span className="eyebrow">Оформление слайдов — временная тема до утверждения брендбука</span>
+          <span className="eyebrow">Оформление слайдов · Базовая тема или ваш брендбук</span>
         </div>
       </footer>
     </div>

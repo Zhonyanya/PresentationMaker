@@ -201,3 +201,32 @@ def test_no_deferred_routes(client):
         for path in routes
         for word in ["versions", "assets", "preview", "export", "history"]
     )
+
+
+def test_brandbook_survives_revision_and_can_be_removed_by_regeneration(client):
+    _, csrf = register(client)
+    brand = {"name": "Тема", "primary": "#663366", "accent": "#CC4422", "headingFont": "Georgia"}
+    accepted = generate(client, csrf, brandbook=brand).json()
+    assert execute(client, accepted)["status"] == "succeeded"
+    current = read(client, accepted)
+    assert current["document"]["brandbook"] == brand
+    url = f"/api/v1/presentations/{accepted['presentation_id']}"
+    revision = client.post(
+        url + "/revisions",
+        headers=headers(csrf, "revise-brand"),
+        json={"base_document_token": current["document_token"], "instruction": "Сократи текст"},
+    )
+    assert execute(client, revision.json())["status"] == "succeeded"
+    current = read(client, accepted)
+    assert current["document"]["brandbook"] == brand
+    regenerated = client.post(
+        url + "/generations",
+        headers=headers(csrf, "without-brand"),
+        json={
+            "base_document_token": current["document_token"],
+            "text": "Текст " * 30,
+            "slideCount": 8,
+        },
+    )
+    assert execute(client, regenerated.json())["status"] == "succeeded"
+    assert "brandbook" not in read(client, accepted)["document"]

@@ -2,8 +2,9 @@ import { useRef, useState, type DragEvent } from 'react'
 import { ClipboardPaste, FileUp, Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { LIMITS } from '@/domain/presentation'
-import { ACCEPTED_FILE_TYPES } from '@/lib/file-import'
+import { ACCEPTED_FILE_TYPES, SOURCE_FORMATS } from '@/lib/file-import'
 import { cn, formatNumber, plural } from '@/lib/utils'
+import { countWords } from '@/lib/text'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { useSourceFileImport } from './useSourceFileImport'
@@ -11,23 +12,25 @@ import { useSourceFileImport } from './useSourceFileImport'
 interface SourceTextFieldProps {
   id: string
   value: string
+  loading: boolean
+  onLoading: (loading: boolean) => void
   onChange: (value: string) => void
   error?: string
   onSubmitShortcut: () => void
   onShowExamples: () => void
 }
 
-export function SourceTextField({ id, value, onChange, error, onSubmitShortcut, onShowExamples }: SourceTextFieldProps) {
+export function SourceTextField({ id, value, loading, onLoading, onChange, error, onSubmitShortcut, onShowExamples }: SourceTextFieldProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
-  const { importFile, loading } = useSourceFileImport((text) => {
+  const importFile = useSourceFileImport(value, (text) => {
     onChange(text)
     textareaRef.current?.focus()
-  })
+  }, onLoading)
 
   const length = value.length
-  const words = value.trim() ? value.trim().split(/\s+/).length : 0
+  const words = countWords(value)
   const overLimit = length > LIMITS.sourceTextMax
   const empty = value.trim() === ''
   const errorId = `${id}-error`
@@ -137,7 +140,7 @@ export function SourceTextField({ id, value, onChange, error, onSubmitShortcut, 
                   Вставить из буфера
                 </Button>
                 <Button type="button" variant="link" size="sm" onClick={() => fileInputRef.current?.click()}>
-                  Загрузить .txt, .md или .docx
+                  Загрузить файл с текстом
                 </Button>
                 <Button type="button" variant="link" size="sm" onClick={onShowExamples}>
                   Открыть пример
@@ -162,7 +165,7 @@ export function SourceTextField({ id, value, onChange, error, onSubmitShortcut, 
             </p>
           ) : (
             <p id={hintId} className="text-muted-foreground">
-              Можно перетащить файл в поле. Поддерживаются .txt, .md и .docx.
+              Перетащите файл в поле. Форматы {SOURCE_FORMATS}, до 10 МБ. Для PDF нужен текстовый слой.
             </p>
           )}
         </div>

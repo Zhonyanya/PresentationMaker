@@ -110,7 +110,7 @@ function Workspace() {
   const userRef = useRef<ServerUser | null>(null)
   const submission = useRef<{ signature: string; key: string } | null>(null)
   const selected = useEditorStore(selectSelectedSlide)
-  const scenes = usePresentationScenes(current?.document?.slides ?? [])
+  const scenes = usePresentationScenes(current?.document?.slides ?? [], current?.document?.brandbook)
 
   const clearPrivate = useCallback(() => {
     epoch.current++
@@ -125,8 +125,11 @@ function Workspace() {
 
   const applyCurrent = useCallback((value: CurrentPresentation) => {
     setCurrent(value)
-    if (value.document) useEditorStore.getState().load(value.document)
-    else useEditorStore.getState().close()
+    if (value.document) {
+      useEditorStore.getState().load(value.document)
+      const { draft, setDraft } = useFlowStore.getState()
+      if (!draft.text) setDraft({ brandbook: value.document.brandbook })
+    } else useEditorStore.getState().close()
   }, [])
 
   const restore = useCallback(async (account: ServerUser, activeEpoch: number) => {
@@ -403,6 +406,7 @@ function Workspace() {
     try {
       const value = await api.current(id)
       if (activeEpoch !== epoch.current) return
+      if (current?.presentation_id !== id) useFlowStore.getState().clearDraft()
       applyCurrent(value); setJob(value.active_job); setWaiting(Boolean(value.active_job))
       const meta = value.active_job ? await readJobMeta(value.active_job.job_id) : { kind: null, startedAt: null }
       setJobKind(meta.kind); setJobStartedAt(value.active_job ? meta.startedAt ?? Date.now() : null)

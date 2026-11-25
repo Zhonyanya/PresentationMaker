@@ -128,19 +128,44 @@ class Document(Contract):
     slides: Annotated[list[Slide], Field(min_length=1, max_length=60)]
 
 
+HexColor = Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")]
+FontFamily = Annotated[
+    text(100, 1), StringConstraints(pattern=r"""^[^<>&"'\\\x00-\x1f\x7f\ufffe\uffff]+$""")
+]
+
+
+class Brandbook(Contract):
+    name: text(120, 1, trim=True)
+    primary: HexColor
+    accent: HexColor
+    headingFont: FontFamily | None = None
+    bodyFont: FontFamily | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def optional_fonts_not_null(cls, value):
+        if isinstance(value, dict) and any(
+            value.get(key, "") is None for key in ("headingFont", "bodyFont")
+        ):
+            raise ValueError("Optional fonts must be absent or strings")
+        return value
+
+
 class GenerateRequest(Contract):
     """Запрос генерации с обязательным желаемым slideCount, а не числом по умолчанию."""
 
+    brandbook: Brandbook | None = None
     text: text(60000, 100, trim=True)
     title: text(200, trim=True) | None = None
     slideCount: Annotated[int, Field(ge=3, le=20)]
 
     @model_validator(mode="before")
     @classmethod
-    def optional_title_not_null(cls, value):
-        """Разрешает отсутствие title, но отклоняет явный null, как исходная Zod-схема."""
-        if isinstance(value, dict) and "title" in value and value["title"] is None:
-            raise ValueError("Optional title must be absent, not null")
+    def optional_fields_not_null(cls, value):
+        if isinstance(value, dict) and any(
+            value.get(key, "") is None for key in ("title", "brandbook")
+        ):
+            raise ValueError("Optional fields must be absent or have a value")
         return value
 
 
