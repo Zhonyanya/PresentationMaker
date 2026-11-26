@@ -1012,7 +1012,7 @@ def test_generation_offers_addressable_pdf_chart_and_uses_plan_block_without_pro
     assert 'composition' not in slides[2]
 
 
-@pytest.mark.parametrize('variant', ['exact', 'duplicate', 'unit', 'year', 'one_value'])
+@pytest.mark.parametrize('variant', ['exact', 'integer_percent', 'duplicate', 'unit', 'year', 'one_value'])
 def test_vector_chart_matches_published_numbers_when_draft_omits_figure_reference(
     monkeypatch, ml, inputs, variant,
 ):
@@ -1028,7 +1028,10 @@ def test_vector_chart_matches_published_numbers_when_draft_omits_figure_referenc
     source = {'blocks': [first]}
     title = 'Доли в 2023 и 2024 годах'
     body = 'Группа А показала рост доли с 48,9 % до 51,5%.'
-    if variant == 'duplicate':
+    if variant == 'integer_percent':
+        first['rows'][2][3] = '50%'
+        body = 'Группа А показала рост доли с 48,9 % до 50%.'
+    elif variant == 'duplicate':
         source['blocks'].append(dict(first, id='pdf-chart-two', page=5,
                                      caption='Рисунок 2.1.2 – Доля обращений, %'))
     elif variant == 'unit':
@@ -1045,11 +1048,11 @@ def test_vector_chart_matches_published_numbers_when_draft_omits_figure_referenc
 
     slides = ml.generate(**inputs, source=source)['slides']
     assert slides[1]['body'] == body
-    if variant == 'exact':
+    if variant in {'exact', 'integer_percent'}:
         assert slides[1]['composition'] == {
             'kind': 'comparison', 'categories': ['Группа А', 'Группа Б', 'Группа В'], 'unit': '%',
             'series': [{'label': '2023', 'values': [48.9, 47.3, 52.7]},
-                       {'label': '2024', 'values': [51.5, 53.9, 55.8]}],
+                       {'label': '2024', 'values': [50 if variant == 'integer_percent' else 51.5, 53.9, 55.8]}],
         }
     else:
         assert 'composition' not in slides[1]
@@ -1414,3 +1417,50 @@ def test_provider_cannot_change_requested_scope_or_caller_target_lists(
     assert numbers == [3]
     assert targets == [document['slides'][2]['id']]
     assert document == snapshot
+
+@pytest.mark.parametrize('extra_slot', [False, True])
+@pytest.mark.parametrize('with_plan', [False, True])
+def test_two_source_charts_split_only_with_a_free_slide(monkeypatch, ml, inputs, extra_slot, with_plan):
+    monkeypatch.setenv('PM_ML_PROMPT_VERSION', 'v4')
+    first = 'На площадке А доли в 2023 и 2024 годах составили 14%, 18%, 24% и 31%.'
+    second = 'На площадке Б опубликованы доли 42%, 49%, 57% и 62%.'
+    source = {'blocks': [
+        {'id': 'chart-a', 'kind': 'table', 'page': 1, 'caption': 'Рисунок 1.1 – Площадка А',
+         'rows': [['Категория', 'Площадка А', None], [None, '2023', '2024'],
+                  ['Услуга 1', '14%', '18%'], ['Услуга 2', '24%', '31%']]},
+        {'id': 'chart-b', 'kind': 'table', 'page': 2, 'caption': 'Рисунок 1.2 – Площадка Б',
+         'rows': [['Категория', 'Площадка Б', None], [None, '2023', '2024'],
+                  ['Услуга 1', '42%', '49%'], ['Услуга 2', '57%', '62%']]},
+    ]}
+    candidate = {'title': 'Услуги', 'slides': [
+        {'layout': 'title', 'title': 'Услуги'},
+        {'layout': 'text', 'title': 'Две площадки', 'body': first + ' ' + second},
+        {'layout': 'closing', 'title': 'Вывод', 'subtitle': 'Доли различаются по площадкам.'},
+    ]}
+    if with_plan:
+        candidate['plan'] = [
+            {'visual_kind': 'text', 'evidence_ids': []},
+            {'visual_kind': 'text', 'evidence_ids': ['block-1', 'block-2']},
+            {'visual_kind': 'text', 'evidence_ids': ['block-1', 'block-2']},
+        ]
+    provider(monkeypatch, ml, candidate)
+    deck = ml._generate(**dict(inputs, slideCount=3 + int(extra_slot)), source=source)
+    slides = deck.document['slides']
+    if with_plan:
+        assert deck.plan is not None
+        assert [item.slide_id for item in deck.plan.slides] == [s['id'] for s in slides]
+        if extra_slot:
+            assert [item.intents[0].evidence[0].block_id for item in deck.plan.slides[1:-1]] == [
+                'chart-a', 'chart-b',
+            ]
+    assert len(slides) == 3 + int(extra_slot)
+    if extra_slot:
+        assert [s['body'] for s in slides[1:-1]] == [first, second]
+        assert [s['composition']['series'][1]['values'] for s in slides[1:-1]] == [[18, 31], [49, 62]]
+        assert slides[1]['id'] != slides[2]['id']
+        assert [s['notes'] for s in slides[1:-1]] == [
+            'Источник: рисунок 1.1, стр. 1.', 'Источник: рисунок 1.2, стр. 2.',
+        ]
+    else:
+        assert slides[1]['body'] == first + ' ' + second
+        assert 'composition' not in slides[1]

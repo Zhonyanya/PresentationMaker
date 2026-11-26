@@ -23,5 +23,16 @@ export function firstSentence(text: string): string {
 }
 
 export function sentencesOf(text: string): string[] {
-  return Array.from(sentences.segment(text), ({ segment }) => segment.trim()).filter(Boolean)
+  const result: string[] = []
+  let pending = ''
+  for (const { segment } of sentences.segment(text)) {
+    pending += segment
+    const sentence = pending.trim()
+    // The Russian segmenter can put a boundary after «им.» or Cyrillic initials.
+    if (/(?:^|[\s(])(?:им\.|(?:[А-ЯЁ]\.\s*)+)$/u.test(sentence)) continue
+    if (sentence) result.push(sentence)
+    pending = ''
+  }
+  if (pending.trim()) result.push(pending.trim())
+  return result
 }

@@ -10,6 +10,7 @@ import type { Slide } from '@/domain/presentation'
 import { buildPresentationScenes } from '@/layouts/registry'
 import type { SceneText } from '@/layouts/scene'
 import { presentationTheme } from '@/theme/presentation-theme'
+import { resolvePresentationTheme } from '@/theme/theme-presets'
 import { buildPptx } from './pptx-export'
 
 it('сохраняет длинные абзацы в порядке чтения и использует две колонки, когда они помещаются', async () => {
@@ -711,4 +712,77 @@ it('выравнивает короткие числовые показател�
   ])
   expect(new Set([texts[0].box.y, texts[2].box.y, texts[4].box.y]).size).toBe(1)
   expect(texts.every(({ overflow }) => !overflow)).toBe(true)
+})
+
+it('отдаёт длинному выводу больше ширины, чем короткой ссылке под диаграммой', () => {
+  const takeaway = 'Заочная форма сократилась с 58,3% до 27,5%, а очно-заочная выросла до 49,1% и стала преобладающей среди студентов частных вузов.'
+  const deck = presentationSchema.parse({ title: 'Обучение', slides: [{
+    id: 'chart-source', layout: 'text', title: 'Формы обучения',
+    body: takeaway + '\nИсточник: МСО.',
+    composition: { kind: 'comparison', unit: '%',
+      categories: ['Очная форма обучения', 'Заочная форма обучения', 'Очно-заочная форма обучения'],
+      series: [{ label: '2020', values: [23.8, 58.3, 17.9] }, { label: '2024', values: [23.4, 27.5, 49.1] }],
+    },
+  }] })
+  const [scene] = buildPresentationScenes(deck.slides, presentationTheme)
+  const chart = scene.elements.find((item) => item.type === 'chart')!
+  const context = scene.elements.filter((item): item is SceneText => item.type === 'text' && item.field === 'body')
+  expect(context).toHaveLength(2)
+  expect(context[0].box.w).toBeGreaterThan(context[1].box.w)
+  expect(context.every(({ box, overflow }) => box.y >= chart.box.y + chart.box.h && !overflow)).toBe(true)
+})
+
+it('раскладывает явный нумерованный список из одного абзаца по карточкам', () => {
+  const items = ['1) Подготовка преподавателей.', '2) Доступность обучения.',
+    '3) Обновление лабораторий.', '4) Сотрудничество с работодателями.']
+  const deck = presentationSchema.parse({ title: 'Программа', slides: [{
+    id: 'priorities', layout: 'text', title: 'Задачи программы', body: items.join(' '),
+  }] })
+  const [scene] = buildPresentationScenes(deck.slides, presentationTheme)
+  const cards = scene.elements.filter((item): item is SceneText => item.type === 'text' && item.field === 'body')
+  expect(cards.map(({ paragraphs }) => paragraphs[0].text)).toEqual(items)
+  expect(cards[0].box.x).toBeLessThan(cards[1].box.x)
+  expect(cards[0].box.y).toBeLessThan(cards[2].box.y)
+  expect(cards.every(({ overflow }) => !overflow)).toBe(true)
+})
+
+it('оставляет длинное пояснение на всю ширину под компактной таблицей', () => {
+  const body = 'Долю участников программы считали отдельно для каждой группы. '
+    + 'В выборку вошли только организации, которые подтвердили сведения за оба периода. '
+    + 'Организации, которые сменили систему учёта, в сравнение не включались. '
+    + 'Данные нельзя переносить на новые площадки, где отчётность ведётся по другим правилам. '
+    + 'Сведения об изменениях состава участников собирали отдельно и использовали при проверке результатов. '
+    + 'Проверку проводили до публикации итогов и дополнительно сверяли исходные журналы, чтобы устранить расхождения между подразделениями.'
+  const deck = presentationSchema.parse({ title: 'Мониторинг', slides: [{
+    id: 'dense-context', layout: 'text', title: 'Доли по категориям', body,
+    composition: { kind: 'comparison', unit: '%',
+      categories: ['Программы бакалавриата', 'Программы специалитета', 'Программы магистратуры'],
+      series: [{ label: '2022', values: [47, 49.9, 50.4] }, { label: '2024', values: [51.9, 50.4, 53.9] }],
+    },
+  }] })
+  const theme = resolvePresentationTheme('urfu')
+  const [scene] = buildPresentationScenes(deck.slides, theme)
+  const table = scene.elements.find((item) => item.type === 'table')
+  const copy = scene.elements.find((item): item is SceneText => item.type === 'text' && item.field === 'body')
+  expect(table?.box.w).toBeCloseTo(theme.slide.width - 2 * theme.spacing.marginX)
+  expect(copy?.box.y).toBeGreaterThan(table!.box.y + table!.box.h)
+  expect(copy?.paragraphs.map(({ text }) => text)).toEqual([body])
+  expect(copy?.overflow).toBe(false)
+})
+
+it('сохраняет инициалы внутри предложения при разбиении длинного абзаца на колонки', () => {
+  const statements = [
+    'Рабочая группа сверила документы всех участников и отдельно проверила записи, по которым менялись правила формирования отчёта.',
+    'Результаты обсуждались с представителями университета им. Н.Э. Баумана и других образовательных организаций.',
+    'Сравнение проводилось только по площадкам с полными данными, а уточнения по новым участникам внесли в отдельный реестр.',
+    'Итоговую подборку передали координаторам для повторной проверки, чтобы опубликовать сводку вместе с необходимыми оговорками.',
+  ]
+  const deck = presentationSchema.parse({ title: 'Отчёт', slides: [{
+    id: 'long-summary', title: 'Проверка данных', layout: 'text', body: statements.join(' '),
+  }] })
+  const [scene] = buildPresentationScenes(deck.slides, resolvePresentationTheme('urfu'))
+  const columns = scene.elements.filter((item): item is SceneText => item.type === 'text' && item.field === 'body')
+  expect(columns).toHaveLength(2)
+  expect(columns.flatMap(({ paragraphs }) => paragraphs.map(({ text }) => text))).toEqual(statements)
+  expect(columns.every(({ overflow }) => !overflow)).toBe(true)
 })

@@ -55,16 +55,12 @@ export function pollFailure(code: ApiErrorCode, failures: number, retries: numbe
 }
 
 /**
- * Пояснение, если слайдов получилось меньше запрошенного: ML-модуль может вернуть
- * меньше слайдов, когда в коротком тексте не хватает материала на запрошенное число.
+ * Сообщение о разнице между запрошенным и фактическим количеством слайдов.
+ * Причина сокращения в ответе API отсутствует.
  */
 export function slideShortfall(current: { requested_slide_count: number; slide_count: number | null } | null | undefined): string | null {
   const actual = current?.slide_count
   if (!current || !actual || actual >= current.requested_slide_count) return null
   const requested = current.requested_slide_count
-  return (
-    `Получилось ${actual} ${plural(actual, ['слайд', 'слайда', 'слайдов'])} вместо ${requested}: ` +
-    'похоже, в тексте не нашлось материала на большее. ' +
-    'Чтобы слайдов было больше, добавьте материал и запустите полную перегенерацию.'
-  )
+  return `Получилось ${actual} ${plural(actual, ['слайд', 'слайда', 'слайдов'])} вместо ${requested}.`
 }

@@ -549,7 +549,7 @@ def _generate(
             rendered_charts = apply_plan_compositions(document, plan, facts['source_facts'], source)
     if source is not None:
         apply_referenced_tables(document, source)
-        apply_referenced_charts(document, source, rendered_charts)
+        plan = apply_referenced_charts(document, source, rendered_charts, max_slides=target_count, plan=plan)
         apply_referenced_equations(document, source, plan)
         apply_referenced_figures(document, source, plan)
     return GeneratedDeck(document, plan)

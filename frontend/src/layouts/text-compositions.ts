@@ -403,6 +403,18 @@ export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElem
         }
         break
       }
+      if (!slide.textStyle && paragraphs.length === 1 && /^1\)\s/u.test(paragraphs[0].text)) {
+        const items = paragraphs[0].text.split(/\s+(?=[2-6]\)\s)/u)
+        if (items.length >= 3 && items.every((item, index) => item.startsWith(`${index + 1}) `))) {
+          const entries = items.map((text) => ({ text }))
+          drawBlocks(entries, 2)
+          if (texts.every((element) => !element.overflow)) break
+          const columns = paragraphColumns(entries, ctx)
+          if (columns) return columns
+          texts.length = 0
+          backgrounds.length = 0
+        }
+      }
       const metricList = slide.textStyle ? undefined : inlinePercentages(paragraphs) ?? labeledMetrics(paragraphs)
       if (metricList) {
         const { intro, metrics, details } = metricList
@@ -454,6 +466,10 @@ export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElem
       const [first, ...rest] = paragraphs
       if (!slide.textStyle && !rest.length && first.text.length >= 230) {
         const sentences = sentencesOf(first.text)
+        if (first.text.length >= 400 && sentences.length >= 3) {
+          const columns = paragraphColumns(sentences.map((text) => ({ text })), ctx)
+          if (columns) return columns
+        }
         const [left, right] = sentences
         if (sentences.length === 2 && Math.min(left.length, right.length) * 1.5 >= Math.max(left.length, right.length)) {
           drawBlocks(sentences.map((text) => ({ text })), 2)

@@ -152,17 +152,19 @@ function comparisonElements(
 
   const takeaway = firstSentence(first)
   const details = [first.slice(takeaway.length).trim(), ...remaining].filter(Boolean).join('\n')
+  const leadFraction = details && takeaway.length >= details.length * 2 ? 0.64 : 0.38
   const bands = [
     { fraction: 0.29, split: true },
     { fraction: 0.37, split: true },
     { fraction: 0.46, split: true },
     { fraction: 0.46, split: false },
+    { fraction: 0.58, split: false, tableFallback: true },
   ]
-  for (const { fraction, split } of bands) {
+  for (const { fraction, split, tableFallback } of bands) {
     const height = box.h * fraction
     const area = { ...box, y: box.y + box.h - height, h: height }
     const inner = inset(area)
-    const columnWidth = inner.w * 0.38
+    const columnWidth = inner.w * leadFraction
     const start = split && details ? { ...inner, w: columnWidth } : inner
     const leadText = compositionText(ctx, 'body', split ? takeaway : slide.body, start,
       textSize, split ? colors.primary : colors.text, split, 'Вывод')
@@ -174,9 +176,8 @@ function comparisonElements(
     }
     if (context.some((text) => text.overflow)) continue
     const visualBox = { ...box, h: box.h - height - gap }
-    const visual = wideChart
-      ? comparisonChart(composition, visualBox, ctx)
-      : comparisonTable(composition, visualBox, ctx)
+    const chart = wideChart && comparisonChart(composition, visualBox, ctx)
+    const visual = chart || ((!wideChart || tableFallback) ? comparisonTable(composition, visualBox, ctx) : undefined)
     if (visual && visual.box.h <= visualBox.h) return [visual, ...panel(area), ...context]
   }
 

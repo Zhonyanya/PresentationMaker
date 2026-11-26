@@ -29,7 +29,7 @@ describe('сообщения о результате задания', () => {
   })
 
   it('пояснение о меньшем числе слайдов — только когда их правда меньше', () => {
-    expect(slideShortfall({ requested_slide_count: 10, slide_count: 4 })).toMatch(/^Получилось 4 слайда вместо 10:/)
+    expect(slideShortfall({ requested_slide_count: 10, slide_count: 4 })).toBe('Получилось 4 слайда вместо 10.')
     expect(slideShortfall({ requested_slide_count: 8, slide_count: 8 })).toBeNull()
     expect(slideShortfall({ requested_slide_count: 5, slide_count: 9 })).toBeNull()
     expect(slideShortfall({ requested_slide_count: 8, slide_count: null })).toBeNull()

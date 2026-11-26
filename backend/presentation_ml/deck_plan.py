@@ -46,6 +46,7 @@ RASTER_FIGURE_NUMBER = re.compile(
 FIGURE_INDEX = re.compile(r'\b[A-Z]{2,8}\d{3,8}\b')
 YEAR_LABEL = re.compile(r'\b(?:19|20)\d{2}\b')
 CHART_DECIMAL = re.compile(r'(?<![\w.,+−-])(\d+[.,]\d{1,3})([ \t]*%)?(?!\w|[.,]\d)')
+CHART_INTEGER_PERCENT = re.compile(r'(?<![\w.,+−-])(\d+)[ \t\u00a0\u202f]*%(?!\w)')
 EQUATION_REFERENCE = re.compile(
     r'\b(?:формул[а-яё]*|уравнен[а-яё]*|equations?)\s*(?:№\s*)?\(?([1-9]\d{0,2})\)?(?![\w.\d])',
     re.I,
@@ -668,9 +669,36 @@ def _matches_chart_numbers(chart: dict, periods: set[str], decimals: set[tuple[f
     )
 
 
+def _chart_numbers(content: str) -> set[tuple[float, bool]]:
+    numbers = {(float(number.replace(',', '.')), bool(percent))
+               for number, percent in CHART_DECIMAL.findall(content)}
+    numbers.update((float(value), True) for value in CHART_INTEGER_PERCENT.findall(content))
+    return numbers
+
+
+def _split_chart_context(body: str, matches: list[tuple[TableBlock, dict]], periods: set[str]):
+    # A date range introduced once can apply to the following comparison too.
+    # Require each side of the sentence boundary to identify its own chart.
+    if len(periods) != 2:
+        return None
+
+    def supported(part: str):
+        values = _chart_numbers(part)
+        return [(table, chart) for table, chart in matches
+                if _matches_chart_numbers(chart, periods, values, part)]
+
+    for boundary in SENTENCE_BREAK.finditer(body):
+        left, right = body[:boundary.start()].strip(), body[boundary.end():].strip()
+        before, after = supported(left), supported(right)
+        if len(before) == len(after) == 1 and before[0][0].id != after[0][0].id:
+            return (left, *before[0]), (right, *after[0])
+    return None
+
+
 def apply_referenced_charts(
     document: dict, source: SourceDocument, already_rendered: Collection[str] = (),
-) -> None:
+    *, max_slides: int | None = None, plan: DeckPlan | None = None,
+) -> DeckPlan | None:
     """Build editable charts from an explicit citation or a unique match of labels and values."""
     by_number = {}
     for block in source.blocks:
@@ -695,20 +723,65 @@ def apply_referenced_charts(
                 used.add(table.id)
     for slide, content in unreferenced:
         periods = set(YEAR_LABEL.findall(content))
-        decimals = {(float(number.replace(',', '.')), bool(percent))
-                    for number, percent in CHART_DECIMAL.findall(content)}
+        decimals = _chart_numbers(content)
         if len(periods) < 2 or len(decimals) < 2:
             continue
         matches = [
-            (table.id, chart) for table in by_number.values()
+            (table, chart) for table in by_number.values()
             if table is not None and (chart := _chart_comparison(table, content))
             and _matches_chart_numbers(chart, periods, decimals, content)
         ]
         if len(matches) == 1:
-            (identifier, chart), = matches
-            if identifier not in used:
+            (table, chart), = matches
+            if table.id not in used:
                 slide['composition'] = chart
-                used.add(identifier)
+                used.add(table.id)
+        elif (len(matches) == 2 and max_slides is not None
+              and len(document['slides']) < max_slides
+              and all(table.id not in used for table, _ in matches)):
+            split = _split_chart_context(slide['body'], matches, periods)
+            if split is None:
+                continue
+            (first_body, first_table, first_chart), (second_body, second_table, second_chart) = split
+            slide_id = slide['id']
+            second_id = slide_id + '-comparison'
+            if any(item['id'] == second_id for item in document['slides']):
+                continue
+            index = document['slides'].index(slide)
+            original_title = slide['title']
+            first_title, second_title = (
+                re.sub(r',\s*%.*$', '', table.rows[0][1] or '').strip() or original_title
+                for table in (first_table, second_table)
+            )
+            def citation(table):
+                number = chart_caption_number(table.caption)
+                page = f', стр. {table.page}' if table.page is not None else ''
+                return f'Источник: рисунок {number}{page}.'
+
+            notes = '\n'.join(filter(None, (slide.get('notes'), citation(first_table))))
+            if len(notes) > 10_000:
+                continue
+            slide.update(title=first_title[:200], body=first_body, composition=first_chart, notes=notes)
+            slide.pop('textStyle', None)
+            document['slides'].insert(index + 1, {
+                'id': second_id, 'layout': 'text', 'title': second_title[:200],
+                'body': second_body, 'composition': second_chart, 'notes': citation(second_table),
+            })
+            used.update((first_table.id, second_table.id))
+            if plan is not None:
+                def chart_plan(identifier, title, body, table):
+                    evidence = EvidenceAddress(table.id, table.id, page=table.page)
+                    return PlannedSlide(identifier, (SlideIntent(
+                        title, body, (evidence,), 'Диаграмма', 'chart',
+                    ),))
+
+                plan = DeckPlan(
+                    plan.slides[:index]
+                    + (chart_plan(slide_id, first_title, first_body, first_table),
+                       chart_plan(second_id, second_title, second_body, second_table))
+                    + plan.slides[index + 1:]
+                )
+    return plan
 
 
 def _planned_illustrations(plan: DeckPlan | None, kind: VisualKind, available: Collection[str]) -> dict[str, set[str]]:
