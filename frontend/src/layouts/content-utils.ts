@@ -19,7 +19,7 @@ export function nonEmpty(items: string[]): string[] {
 const sentences = new Intl.Segmenter('ru', { granularity: 'sentence' })
 
 export function firstSentence(text: string): string {
-  return sentences.segment(text).containing(0)?.segment.trim() ?? text
+  return sentencesOf(text)[0] ?? text
 }
 
 export function sentencesOf(text: string): string[] {
