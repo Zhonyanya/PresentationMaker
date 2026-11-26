@@ -99,7 +99,7 @@ export function sourceTable(
   }
 
   let selected = fitColumns(defaultWidths)
-  if (!comparisonStyle && !merges?.length) {
+  if (!merges?.length) {
     // Reserve half the width equally. Longer cells compete for the remaining half.
     const weights = rows[0].map((_, column) => Math.sqrt(Math.max(
       1, ...rows.flatMap((row) => (row[column] ?? '').split('\n').map((line) => line.trim().length)),

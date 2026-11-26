@@ -1108,6 +1108,26 @@ def test_figure_selection_can_use_two_ratios_from_adjacent_source_prose(monkeypa
     assert 'sourceMaterial' not in slides[3]
 
 
+@pytest.mark.parametrize('duplicate', [False, True])
+def test_figure_selection_uses_unique_verbatim_adjacent_prose(duplicate):
+    from app.presentations.source_blocks import IllustrationBlock, SourceDocument, TextBlock
+    from presentation_ml.deck_plan import apply_referenced_figures
+
+    body = ('Walking accounted for 47% of journeys among younger children, while older children '
+            'made 38% of their school journeys on foot during the same period.')
+    png = ('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC'
+           'AAAAC0lEQVR42mP8/x8AAusB9Wl2Rx8AAAAASUVORK5CYII=')
+    blocks = [
+        IllustrationBlock('chart', '30,90,200,220', 'School travel by age', 2, png),
+        TextBlock('description', body, 2),
+    ]
+    if duplicate:
+        blocks.append(IllustrationBlock('other-chart', '30,230,200,390', 'Travel patterns', 2, png))
+    slide = {'id': 'slide', 'layout': 'text', 'title': 'Routenwahl nach Altersgruppe', 'body': body}
+    apply_referenced_figures({'slides': [slide]}, SourceDocument(tuple(blocks)), None)
+    assert slide.get('sourceMaterial') == (None if duplicate else {'kind': 'image', 'page': 2, 'png': png})
+
+
 @pytest.mark.parametrize('body, attached', [
     ('В сценарии S1 рост составил около 4,2 раза.', True),
     ('Рост составил около 4,2 раза.', False),

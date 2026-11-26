@@ -2,6 +2,7 @@ import type { TextSlide } from '@/domain/presentation'
 import { contentBox, fittedText, lines } from './chrome'
 import { firstSentence, sentencesOf } from './content-utils'
 import type { Box, SceneElement, SceneParagraph, SceneText } from './scene'
+import { comparisonTableStyle, sourceTable } from './source-material'
 import type { RenderContext } from './types'
 import { estimateTextHeight } from './text-fit'
 
@@ -128,7 +129,7 @@ function paragraphColumns(paragraphs: SceneParagraph[], ctx: RenderContext): Sce
   ]
 }
 
-const statisticLabel = /^\p{L}[\p{L}\p{M}\d ()/–-]{1,42}:(?=\s)/u
+const statisticLabel = /^(?:(?:19|20)\d{2}|\p{L}[\p{L}\p{M}\d ()/–-]{1,42}):(?=\s)/u
 const statisticValue = /(?<![\p{L}\p{N}])[+−-]?\d+(?:[ \u00a0\u202f]\d{3})*(?:[,.]\d+)?(?:[–—-]\d+)?(?:[ \u00a0\u202f]*%)?(?![\p{L}\p{N}])/gu
 const yearOrRange = /^(?:19|20)\d{2}(?:[–—-]\d{2,4})?$/
 
@@ -191,6 +192,8 @@ function statisticGroups(paragraphs: SceneParagraph[], ctx: RenderContext): Scen
 const percentageListIntro = /^(.{6,145}?(?::|\b(?:were|are|included)))\s+(.+)$/iu
 const percentageListItem = /^([\p{L}\p{M}\d '’‘«»–-]{2,42})\s*\((\d{1,3}(?:[.,]\d+)?[ \u00a0\u202f]*%)\)$/u
 
+const percentageSuffixItem = /^([\p{L}\p{M} '’‘«»–-]{2,42})\s+(\d{1,3}(?:[.,]\d+)?[ \u00a0\u202f]*%)$/u
+
 function inlinePercentages(paragraphs: SceneParagraph[]) {
   const [first, ...rest] = paragraphs
   const sentence = firstSentence(first.text)
@@ -201,7 +204,9 @@ function inlinePercentages(paragraphs: SceneParagraph[]) {
   if (items.length < 2 || items.length > 3) return undefined
   const metrics: { label: string; value: string }[] = []
   for (const item of items) {
-    const entry = item.trim().match(percentageListItem)
+    const candidate = item.trim()
+    const entry = candidate.match(percentageListItem)
+      ?? (intro.endsWith(':') ? candidate.match(percentageSuffixItem) : null)
     if (!entry) return undefined
     metrics.push({ label: entry[1].trim(), value: entry[2] })
   }
@@ -210,6 +215,49 @@ function inlinePercentages(paragraphs: SceneParagraph[]) {
   return { intro, metrics, details: tail ? [{ text: tail }, ...rest] : rest }
 }
 
+const scalarMetric = /^(\p{L}[\p{L}\p{M} -]{1,26}):\s+([+−-]?\d+(?:[ \u00a0\u202f]\d{3})*(?:[,.]\d+)?)(?:\s+(\p{L}[\p{L}\p{M} -]{0,22}))?\.?$/u
+
+function labeledMetrics(paragraphs: SceneParagraph[]) {
+  const sentences = paragraphs.flatMap(({ text }) => sentencesOf(text))
+  const metrics = []
+  for (const sentence of sentences) {
+    const match = sentence.match(scalarMetric)
+    if (!match) break
+    const [, label, value, unit] = match
+    metrics.push({ label, value, unit })
+  }
+  if (metrics.length < 2 || metrics.length > 3) return undefined
+  if (new Set(metrics.map(({ label }) => label.toLowerCase())).size !== metrics.length) return undefined
+  return { intro: '', metrics: metrics.map(({ label, value, unit }) => ({
+    label: unit ? label + ' · ' + unit : label, value,
+  })), details: sentences.slice(metrics.length).map((text) => ({ text })) }
+}
+
+function parallelMeasures(paragraph: SceneParagraph): SceneParagraph[] {
+  const items = paragraph.text.split(/(?<=[,;])\s+/u)
+  const measure = /^\p{L}[\p{L}\p{M}\d ()-]{0,34}\s+[—–]\s+[+−-]?\d+(?:[,.]\d+)?[^,;]{0,24}[,. ;]?$/u
+  return items.length >= 2 && items.length <= 4 && items.every((item) => measure.test(item))
+    ? items.map((text) => ({ text }))
+    : []
+}
+
+function leadContent(slide: TextSlide, paragraphs: SceneParagraph[]) {
+  const [first, ...rest] = paragraphs
+  if (!first) return { lead: '', details: [] }
+  const lead = slide.textStyle === 'lead' ? first.text : firstSentence(first.text)
+  const remaining = first.text.slice(lead.length).trim()
+  return { lead, details: remaining ? [{ text: remaining }, ...rest] : rest }
+}
+
+function sideLeadFits(lead: string, details: SceneParagraph[]): boolean {
+  return lead.length <= 110 && details.length > 0 && details.length <= 4
+    && details.reduce((sum, item) => sum + item.text.length, 0) <= 320
+}
+
+export function canPlaceLeadOnSide(slide: TextSlide): boolean {
+  const { lead, details } = leadContent(slide, lines(slide.body))
+  return sideLeadFits(lead, details)
+}
 
 export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElement[] | undefined {
   const paragraphs = lines(slide.body)
@@ -355,14 +403,36 @@ export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElem
         }
         break
       }
-      const percentages = slide.textStyle ? undefined : inlinePercentages(paragraphs)
-      if (percentages) {
-        const { intro, metrics, details } = percentages
-        const headingHeight = 0.72
+      const metricList = slide.textStyle ? undefined : inlinePercentages(paragraphs) ?? labeledMetrics(paragraphs)
+      if (metricList) {
+        const { intro, metrics, details } = metricList
+        const second = details.length ? inlinePercentages(details) : undefined
+        if (intro.endsWith(':') && second?.intro.endsWith(':')
+            && second.metrics.length === metrics.length) {
+          const values = new Map(second.metrics.map(({ label, value }) => [label.toLowerCase(), value]))
+          if (metrics.every(({ label }) => values.has(label.toLowerCase()))) {
+            const rows = [
+              ['Категория', intro.slice(0, -1), second.intro.slice(0, -1)],
+              ...metrics.map(({ label, value }) => [label, value, values.get(label.toLowerCase())!]),
+            ]
+            const table = sourceTable(rows, { ...box, h: box.h * 0.7 },
+              ctx.theme.fonts.body, typography.absoluteMinFontSize, undefined, comparisonTableStyle(ctx.theme))
+            if (table.box.h <= box.h * 0.7) {
+              if (second.details.length) {
+                text(second.details, { ...box, y: box.y + table.box.h + gap, h: box.h - table.box.h - gap },
+                  { valign: 'top' })
+              }
+              if (!texts.some((element) => element.overflow)) return [table, ...texts]
+              texts.length = 0
+            }
+          }
+        }
+        const headingHeight = intro ? 0.72 : 0
+        const headingGap = intro ? gap : 0
         const height = 1.85
-        const top = box.y + headingHeight + gap
+        const top = box.y + headingHeight + headingGap
         const width = (box.w - gap * (metrics.length - 1)) / metrics.length
-        text([{ text: intro }], { ...box, h: headingHeight }, { valign: 'top' })
+        if (intro) text([{ text: intro }], { ...box, h: headingHeight }, { valign: 'top' })
         metrics.forEach(({ label, value }, index) => {
           const x = box.x + index * (width + gap)
           surface({ x, y: top, w: width, h: height })
@@ -374,7 +444,7 @@ export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElem
             { valign: 'top' })
         })
         if (details.length) {
-          text(details, { ...box, y: top + height + gap, h: box.h - headingHeight - height - 2 * gap },
+          text(details, { ...box, y: top + height + gap, h: box.h - headingHeight - headingGap - height - gap },
             { valign: 'top' })
         }
         break
@@ -382,16 +452,28 @@ export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElem
       const statistics = slide.textStyle ? undefined : statisticGroups(paragraphs, ctx)
       if (statistics) return statistics
       const [first, ...rest] = paragraphs
-      const lead = slide.textStyle === 'lead' ? first.text : firstSentence(first.text)
-      const remainingFirst = first.text.slice(lead.length).trim()
-      const details = remainingFirst ? [{ text: remainingFirst }, ...rest] : rest
+      if (!slide.textStyle && !rest.length && first.text.length >= 230) {
+        const sentences = sentencesOf(first.text)
+        const [left, right] = sentences
+        if (sentences.length === 2 && Math.min(left.length, right.length) * 1.5 >= Math.max(left.length, right.length)) {
+          drawBlocks(sentences.map((text) => ({ text })), 2)
+          if (texts.every((element) => !element.overflow)) break
+          texts.length = 0
+          backgrounds.length = 0
+        }
+      }
+      const { lead, details } = leadContent(slide, paragraphs)
       if (lead.length > 185 || details.length > 4) return paragraphColumns(paragraphs, ctx)
-      if (ctx.leadPlacement === 'side' && lead.length <= 110 && details.length
-          && details.reduce((sum, item) => sum + item.text.length, 0) <= 320) {
-        const highlight = { ...box, w: box.w * 0.40, h: box.h * 0.87 }
+      if (ctx.leadPlacement === 'side' && sideLeadFits(lead, details)) {
+        const heading = [{ text: lead }]
+        const width = box.w * 0.44
+        const height = estimateTextHeight(heading, width - 2 * padding, 26, {
+          bold: true, lineSpacing: 1.04, paragraphSpacing: typography.paragraphSpacing,
+        })
+        const highlight = { ...box, w: width, h: Math.min(box.h, Math.max(1.65, height * 1.65 + 2 * padding)) }
         surface(highlight, colors.primary)
-        text([{ text: lead }], inset(highlight), { accent: true, max: 26 })
-        text(details, inset({ ...box, x: box.x + highlight.w + gap, w: box.w - highlight.w - gap }))
+        text(heading, inset(highlight), { accent: true, max: 26 })
+        text(details, inset({ ...box, x: box.x + width + gap, w: box.w - width - gap }), { valign: 'top' })
         break
       }
       if (ctx.leadPlacement === 'inline' || ctx.leadPlacement === 'side') {
@@ -413,10 +495,37 @@ export function textComposition(slide: TextSlide, ctx: RenderContext): SceneElem
       surface(highlight, colors.primary)
       text([{ text: lead }], inset(highlight), { accent: true, max: Math.max(26, typography.heading.max) })
       if (details.length) {
-        text(details, {
-          x: box.x + padding, y: box.y + highlight.h + gap,
-          w: box.w - 2 * padding, h: box.h - highlight.h - gap,
+        const detailWidth = box.w - 2 * padding
+        const detailHeight = estimateTextHeight(details, detailWidth, typography.body.max, {
+          lineSpacing: 1.04, paragraphSpacing: typography.paragraphSpacing,
         })
+        const frame = {
+          ...box, y: box.y + highlight.h + gap,
+          h: Math.min(box.h - highlight.h - gap, detailHeight + 2 * padding + 0.15),
+        }
+        const sentence = firstSentence(details[0].text)
+        const measures = parallelMeasures({ text: sentence })
+        if (measures.length) {
+          const remaining = details[0].text.slice(sentence.length).trim()
+          const caveats = remaining ? [{ text: remaining }, ...details.slice(1)] : details.slice(1)
+          const measureWidth = (box.w - gap * (measures.length - 1)) / measures.length
+          const measureHeight = Math.min(1.4, frame.h)
+          measures.forEach((measure, index) => {
+            const area = { ...frame, x: box.x + index * (measureWidth + gap), w: measureWidth, h: measureHeight }
+            surface(area)
+            text([measure], inset(area), { heading: true })
+          })
+          if (caveats.length) {
+            text(caveats, {
+              ...box, y: frame.y + measureHeight + gap,
+              h: box.h - highlight.h - 2 * gap - measureHeight,
+            }, { valign: 'top' })
+          }
+          break
+        }
+        surface(frame)
+        surface({ ...frame, w: 0.055 }, colors.accent)
+        text(details, inset(frame), { valign: 'top' })
       }
     }
   }

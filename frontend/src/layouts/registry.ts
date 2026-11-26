@@ -8,6 +8,7 @@ import { bulletsLayout } from './definitions/bullets'
 import { twoColumnLayout } from './definitions/two-column'
 import { sectionLayout } from './definitions/section'
 import { closingLayout } from './definitions/closing'
+import { canPlaceLeadOnSide } from './text-compositions'
 
 /**
  * Реестр макетов. Порядок здесь = порядок в меню выбора макета.
@@ -40,16 +41,19 @@ export function buildSlideScene(slide: Slide, ctx: RenderContext): SlideScene {
 /** Контекст рендера для каждого слайда: номер, общий счётчик, номер раздела. */
 export function buildRenderContexts(slides: Slide[], theme: PresentationTheme): RenderContext[] {
   let section = 0
-  let consecutiveLeads = 0
-  const leadPlacements = ['top', 'side', 'inline'] as const
+  let previousLead: RenderContext['leadPlacement']
   return slides.map((slide, index) => {
     if (slide.layout === 'section') section += 1
-    const isLead = slide.layout === 'text' && slide.body.trim() && !slide.sourceMaterial && !slide.composition
-      && (slide.textStyle === undefined || slide.textStyle === 'lead')
-    consecutiveLeads = isLead ? consecutiveLeads + 1 : 0
+    let leadPlacement: RenderContext['leadPlacement']
+    if (slide.layout === 'text' && slide.body.trim() && !slide.sourceMaterial && !slide.composition
+        && (slide.textStyle === undefined || slide.textStyle === 'lead')) {
+      if (previousLead === 'top') leadPlacement = canPlaceLeadOnSide(slide) ? 'side' : 'inline'
+      else leadPlacement = previousLead === 'side' ? 'inline' : 'top'
+    }
+    previousLead = leadPlacement
     return {
       theme, number: index + 1, total: slides.length, sectionNumber: Math.max(section, 1),
-      leadPlacement: isLead ? leadPlacements[(consecutiveLeads - 1) % leadPlacements.length] : undefined,
+      leadPlacement,
     }
   })
 }

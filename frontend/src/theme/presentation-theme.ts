@@ -192,23 +192,23 @@ export function readableColor(preferred: string, background: string) {
   return bg > 0.179 ? '#000000' : '#FFFFFF'
 }
 
-export function themeFor(brandbook?: Brandbook): PresentationTheme {
-  if (!brandbook) return presentationTheme
+export function themeFor(brandbook?: Brandbook, base = presentationTheme): PresentationTheme {
+  if (!brandbook) return base
   const { name, primary, accent, headingFont, bodyFont } = brandbook
   const onPrimary = readableColor('#FFFFFF', primary)
   return {
-    ...presentationTheme,
+    ...base,
     id: 'brandbook',
     name,
     colors: {
-      ...presentationTheme.colors, primary, accent,
+      ...base.colors, primary, accent,
       textOnPrimary: onPrimary, textOnPrimaryMuted: onPrimary,
       accentOnPrimary: readableColor(accent, primary),
     },
     fonts: {
-      ...presentationTheme.fonts,
-      heading: headingFont ?? presentationTheme.fonts.heading,
-      body: bodyFont ?? presentationTheme.fonts.body,
+      ...base.fonts,
+      heading: headingFont ?? base.fonts.heading,
+      body: bodyFont ?? base.fonts.body,
     },
   }
 }

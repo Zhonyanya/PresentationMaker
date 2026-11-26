@@ -144,7 +144,7 @@ export function ExportDialog({ open, onOpenChange, presentation, scenes }: Expor
             {[
               ['Слайдов', String(count)],
               ['Формат', '16:9'],
-              ['Оформление', presentation.brandbook?.name ?? (theme.isOfficial ? theme.name : 'Нейтральное')],
+              ['Оформление', theme.isOfficial ? theme.name : (presentation.brandbook?.name ?? 'Нейтральное')],
             ].map(([term, value]) => (
               <div key={term} className="flex flex-col gap-1.5 border-l border-border pl-4 first:border-l-0 first:pl-0">
                 <dt className="eyebrow !text-[10px]">{term}</dt>

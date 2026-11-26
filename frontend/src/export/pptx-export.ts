@@ -6,7 +6,6 @@ import { paragraphRuns } from '@/layouts/scene'
 import { tableCellStyle, visibleTableCells } from '@/layouts/source-material'
 import type { PresentationTheme } from '@/theme/presentation-theme'
 import { prepareThemeForExport, resolvePresentationTheme } from '@/theme/theme-presets'
-import { themeFor } from '@/theme/presentation-theme'
 import { sanitizeText } from '@/lib/text'
 
 /**
@@ -151,7 +150,7 @@ function addElement(pptx: PptxGenJS, slide: PptxSlide, element: SceneElement) {
 }
 
 export async function buildPptx(presentation: Presentation, options: ExportOptions = {}): Promise<PptxGenJS> {
-  const theme = await prepareThemeForExport(options.theme ?? (presentation.brandbook ? themeFor(presentation.brandbook) : resolvePresentationTheme(presentation.themeId)))
+  const theme = await prepareThemeForExport(options.theme ?? resolvePresentationTheme(presentation.themeId, presentation.brandbook))
   const includeNotes = options.includeNotes ?? true
   const { default: PptxGenJSClass } = await import('pptxgenjs')
   const pptx = new PptxGenJSClass()
@@ -177,9 +176,9 @@ export async function buildPptx(presentation: Presentation, options: ExportOptio
 }
 
 export async function buildPptxBytes(presentation: Presentation, options: ExportOptions = {}): Promise<ArrayBuffer> {
-  const theme = options.theme ?? (presentation.brandbook ? themeFor(presentation.brandbook) : resolvePresentationTheme(presentation.themeId))
+  const theme = options.theme ?? resolvePresentationTheme(presentation.themeId, presentation.brandbook)
   const pptx = await buildPptx(presentation, options)
-  const branded = Boolean(presentation.brandbook || options.theme)
+  const branded = Boolean(presentation.themeId || presentation.brandbook || options.theme)
   const bytes = await pptx.write({ outputType: 'arraybuffer', compression: !branded }) as ArrayBuffer
   if (!branded) return bytes
 

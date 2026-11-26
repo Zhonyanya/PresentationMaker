@@ -167,6 +167,21 @@ it('показывает равноправные периоды рядом и �
   for (const phrase of [march, april, limitation]) expect(xml).toContain(phrase)
 })
 
+it('размещает подписанные годы и базы сравнения рядом, сохраняя знаки изменения', () => {
+  const lines = ['2025: 841 поездка, 5 605 миль.', 'К 2024: −9% поездок.', 'К 2019: −12% поездок.']
+  const deck = presentationSchema.parse({
+    title: 'Поездки',
+    slides: [{ id: 'periods', layout: 'text', title: 'Динамика', body: lines.join(' ') }],
+  })
+  const [scene] = buildPresentationScenes(deck.slides, presentationTheme)
+  const groups = scene.elements.filter((element): element is SceneText =>
+    element.type === 'text' && element.field === 'body',
+  )
+  expect(groups.map(({ paragraphs }) => paragraphs.map(({ text }) => text))).toEqual(lines.map((line) => [line]))
+  expect(new Set(groups.map(({ box }) => box.y)).size).toBe(1)
+  expect(groups[1].paragraphs[0].emphasis).toContainEqual({ start: 8, end: 11 })
+})
+
 it('выделяет числа в явно подписанных группах и сохраняет утверждения целиком', async () => {
   const methods = 'Доля поездок: автомобиль 58% (76% миль), пешком 29%.'
   const purposes = 'Основные цели: покупки 17%, поездки на работу 13%, прогулка 9%.'
@@ -522,16 +537,17 @@ it('показывает общий заголовок дерева один р�
 })
 
 
-it('применяет выбранный шаблон УрФУ и к превью, и к обычному экспорту PPTX', async () => {
+it.each([undefined, { name: 'Тема', primary: '#663366', accent: '#CC4422' }])(
+  'применяет шаблон УрФУ к превью и PPTX с брендбуком %j', async (brandbook) => {
   const deck = presentationSchema.parse({
-    title: 'Отчёт', themeId: 'urfu', slides: [
+    title: 'Отчёт', themeId: 'urfu', brandbook, slides: [
       { id: 'cover', layout: 'title', title: 'Отчёт' },
       { id: 'body', layout: 'text', title: 'Наблюдения', body: 'Сводка наблюдений за период.' },
       { id: 'end', layout: 'closing', title: 'Результаты' },
     ],
   })
   const preview = renderToStaticMarkup(createElement(function Preview() {
-    const scenes = usePresentationScenes(deck.slides, deck.themeId)
+    const scenes = usePresentationScenes(deck.slides, deck.themeId, deck.brandbook)
     return createElement('div', null, ...scenes.map((scene, key) =>
       createElement(SlideRenderer, { scene, key, scale: 1 })))
   }))
@@ -541,6 +557,12 @@ it('применяет выбранный шаблон УрФУ и к превь
   for (const index of [1, 2, 3]) {
     const xml = await zip.file(`ppt/slides/slide${index}.xml`)?.async('string') ?? ''
     expect(xml).toMatch(/<p:bg>.*?<a:blipFill[ >]/s)
+    if (index === 1) {
+      expect(xml).toContain('FCEC4F')
+      expect(xml).toContain('typeface="Montserrat"')
+      expect(xml).toContain('val="FFFFFF"')
+      expect(xml).not.toContain('663366')
+    }
   }
   expect(await zip.file('ppt/slides/slide2.xml')?.async('string')).toContain('Сводка наблюдений за период.')
 })
@@ -565,4 +587,128 @@ it('выделяет подписанные проценты и оставляе
   for (const text of [description, 'shopping', 'commuting', 'just walk', '17%', '13%', '9%', condition]) {
     expect(xml).toContain(text)
   }
+})
+
+it('balances two dense statements across columns and preserves the lead when more details follow', () => {
+  const first = 'Children aged five to ten made almost half of their journeys to school on foot during the last survey year, with the car a close second.'
+  const second = 'For children aged eleven to sixteen, walking was also the most common mode, followed by trips by car and journeys on local buses.'
+  const third = 'The share of school journeys made by bus was higher among older children.'
+  const slides = [
+    { id: 'parallel', layout: 'text' as const, title: 'School journeys', body: first + ' ' + second },
+    { id: 'lead', layout: 'text' as const, title: 'Travel context', body: first + ' ' + second + ' ' + third },
+  ]
+  const scenes = buildPresentationScenes(slides, presentationTheme)
+  const body = scenes.map((scene) => scene.elements.flatMap((item) =>
+    item.type === 'text' && item.field === 'body' ? [item] : []))
+  expect(body[0].map(({ paragraphs }) => paragraphs.map(({ text }) => text))).toEqual([[first], [second]])
+  expect(body[0][1].box.x).toBeGreaterThan(body[0][0].box.x)
+  expect(body[1][0].style.bold).toBe(true)
+  expect(body.flat().every((item) => !item.overflow)).toBe(true)
+})
+
+it('advances from the actual lead placement when side placement cannot fit', () => {
+  const body = 'Подтверждение согласия от получателя обычно оформляется отдельной записью в личном кабинете после направления запроса. Затем заявка поступает на проверку.'
+  const slides = Array.from({ length: 3 }, (_, index) => ({
+    id: String(index), layout: 'text' as const, title: 'Подтверждение заявки', body,
+  }))
+  const scenes = buildPresentationScenes(slides, presentationTheme)
+  const highlights = scenes.map(({ elements }) => elements.some((element) =>
+    element.type === 'rect' && element.fill === presentationTheme.colors.primary && element.box.h > 1))
+  expect(highlights).toEqual([true, false, true])
+})
+
+it('группирует подписанные измерения и сохраняет оговорку в PPTX', async () => {
+  const lead = 'Выдача оборудования ускорилась.'
+  const measures = ['Январь — 4,8 часа,', 'февраль — 4,2 часа,', 'март — 3,1 часа.']
+  const caveat = 'Учтены только завершённые выдачи.'
+  const deck = presentationSchema.parse({
+    title: 'Пилот',
+    slides: [{ id: 'measures', layout: 'text', textStyle: 'lead', title: 'Выдача',
+      body: lead + '\n' + [...measures, caveat].join(' ') }],
+  })
+  const [scene] = buildPresentationScenes(deck.slides, presentationTheme)
+  const body = scene.elements.filter((item): item is SceneText => item.type === 'text' && item.field === 'body')
+  const expected = [lead, ...measures, caveat]
+  expect(body.flatMap(({ paragraphs }) => paragraphs.map(({ text }) => text))).toEqual(expected)
+  expect(body.every(({ overflow }) => !overflow)).toBe(true)
+  expect(body[1].box.y).toBe(body[3].box.y)
+  expect(body[1].box.x).toBeLessThan(body[3].box.x)
+  expect(body[4].box.y).toBeGreaterThan(body[3].box.y)
+  const pptx = await buildPptx(deck)
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const xml = await zip.file('ppt/slides/slide1.xml')!.async('string')
+  expect(expected.every((text) => xml.includes(text))).toBe(true)
+})
+
+it('показывает русские доли с десятичными запятыми отдельными показателями', async () => {
+  const intro = 'Электронное обучение в госвузах — более 50% студентов:'
+  const detail = 'Дистанционные технологии учитывались отдельно.'
+  const deck = presentationSchema.parse({ title: 'Обучение', slides: [{
+    id: 'shares', layout: 'text', title: 'Формы обучения',
+    body: intro + ' бакалавриат 51,9%, магистратура 53,9%, специалитет 50,4%. ' + detail,
+  }] })
+  const [scene] = buildPresentationScenes(deck.slides, presentationTheme)
+  const text = scene.elements.flatMap((item) =>
+    item.type === 'text' && item.field === 'body' ? item.paragraphs.map(({ text }) => text) : [])
+  expect(text).toEqual([intro, '51,9%', 'бакалавриат', '53,9%', 'магистратура', '50,4%', 'специалитет', detail])
+  const pptx = await buildPptx(deck)
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const xml = await zip.file('ppt/slides/slide1.xml')!.async('string')
+  expect(text.every((part) => xml.includes(part))).toBe(true)
+})
+
+it('сопоставляет две серии процентов по названиям категорий и экспортирует редактируемые ячейки', async () => {
+  const detail = 'Данные собраны по государственным вузам.'
+  const deck = presentationSchema.parse({ title: 'Обучение', slides: [{
+    id: 'paired-shares', layout: 'text', title: 'Формы обучения',
+    body: 'Электронное обучение в госвузах — более 50% студентов: бакалавриат 51,9%, магистратура 53,9%. '
+      + 'Дистанционные технологии: магистратура 50%, бакалавриат 48,6%. ' + detail,
+  }] })
+  const [scene] = buildPresentationScenes(deck.slides, presentationTheme)
+  const table = scene.elements.find((item) => item.type === 'table')!
+  expect(table.columnWidths[1]).toBeGreaterThan(table.columnWidths[0])
+  expect(table).toMatchObject({
+    rows: [
+      ['Категория', 'Электронное обучение в госвузах — более 50% студентов', 'Дистанционные технологии'],
+      ['бакалавриат', '51,9%', '48,6%'],
+      ['магистратура', '53,9%', '50%'],
+    ],
+  })
+  const pptx = await buildPptx(deck)
+  const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+  const xml = await zip.file('ppt/slides/slide1.xml')!.async('string')
+  for (const value of ['<a:tbl>', '<a:t>48,6%</a:t>', detail]) expect(xml).toContain(value)
+})
+
+it.each([undefined, { name: 'Тема', primary: '#663366', accent: '#CC4422' }])(
+  'сохраняет обычное оформление без выбора УрФУ: %j', async (brandbook) => {
+    const deck = presentationSchema.parse({ title: 'Отчёт', brandbook, slides: [
+      { id: 'cover', layout: 'title', title: 'Отчёт' },
+    ] })
+    const preview = renderToStaticMarkup(createElement(function Preview() {
+      const [scene] = usePresentationScenes(deck.slides, deck.themeId, deck.brandbook)
+      return createElement(SlideRenderer, { scene, scale: 1 })
+    }))
+    expect(preview).not.toContain('background-image:url')
+    const pptx = await buildPptx(deck)
+    const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+    const xml = await zip.file('ppt/slides/slide1.xml')!.async('string')
+    expect(xml).not.toContain('<a:blipFill')
+    if (brandbook) expect(xml).toContain('663366')
+  },
+)
+
+it('выравнивает короткие числовые показатели и сохраняет единицы и оговорку', () => {
+  const caveat = 'Учитывались только завершённые выдачи.'
+  const deck = presentationSchema.parse({ title: 'Пилот', slides: [{
+    id: 'counts', layout: 'text', title: 'Динамика выдачи',
+    body: 'Январь: 48 комплектов. Февраль: 62 комплекта. Март: 71 комплект. ' + caveat,
+  }] })
+  const [scene] = buildPresentationScenes(deck.slides, presentationTheme)
+  const texts = scene.elements.filter((item): item is SceneText => item.type === 'text' && item.field === 'body')
+  expect(texts.map(({ paragraphs }) => paragraphs[0].text)).toEqual([
+    '48', 'Январь · комплектов', '62', 'Февраль · комплекта', '71', 'Март · комплект', caveat,
+  ])
+  expect(new Set([texts[0].box.y, texts[2].box.y, texts[4].box.y]).size).toBe(1)
+  expect(texts.every(({ overflow }) => !overflow)).toBe(true)
 })

@@ -810,14 +810,16 @@ def apply_referenced_figures(document: dict, source: SourceDocument, plan: DeckP
         )
         for identifier, block in figures.items()
     }
-    nearby_ratios = {
-        block.id: set().union(*(
-            _figure_ratios(neighbor.text)
-            for neighbor in source.blocks[max(0, index - 1):index + 2]
-            if isinstance(neighbor, TextBlock) and neighbor.page == block.page
-        ))
+    nearby_text = {
+        block.id: [' '.join(neighbor.text.casefold().split())
+                   for neighbor in source.blocks[max(0, index - 1):index + 2]
+                   if isinstance(neighbor, TextBlock) and neighbor.page == block.page]
         for index, block in enumerate(source.blocks)
         if block.id in figures
+    }
+    nearby_ratios = {
+        identifier: set().union(*(_figure_ratios(text) for text in neighbors))
+        for identifier, neighbors in nearby_text.items()
     }
     planned = _planned_illustrations(plan, 'figure', figures)
     used = set()
@@ -845,6 +847,10 @@ def apply_referenced_figures(document: dict, source: SourceDocument, plan: DeckP
                     matches = {identifier for identifier, (_, _, heading) in identifiers.items()
                                if words.intersection(heading.split())
                                and len(ratios & nearby_ratios[identifier]) >= 2}
+                    if not matches and len(ratios) >= 2:
+                        body = ' '.join(slide['body'].casefold().split())
+                        matches = {identifier for identifier, neighbors in nearby_text.items()
+                                   if len(body) >= 100 and body in neighbors}
         if len(matches) != 1:
             continue
         (identifier,) = matches
