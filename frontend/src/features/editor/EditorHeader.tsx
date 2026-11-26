@@ -7,6 +7,7 @@ import { SimpleTooltip } from '@/components/ui/tooltip'
 import { LIMITS } from '@/domain/presentation'
 
 interface EditorHeaderProps {
+  brandbookName?: string
   title: string
   showTemporaryTheme?: boolean
   onTitleChange?: (title: string) => void
@@ -16,7 +17,7 @@ interface EditorHeaderProps {
   extra?: ReactNode
 }
 
-export function EditorHeader({ title, onTitleChange, onBack, onExport, extra, showTemporaryTheme = true }: EditorHeaderProps) {
+export function EditorHeader({ brandbookName, title, onTitleChange, onBack, onExport, extra, showTemporaryTheme = true }: EditorHeaderProps) {
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-center gap-2 border-b border-border bg-background px-2 sm:gap-3 sm:px-4" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
       <SimpleTooltip label="К исходному тексту — презентация сохранится">
@@ -47,7 +48,7 @@ export function EditorHeader({ title, onTitleChange, onBack, onExport, extra, sh
           <Check className="size-3.5 text-success" aria-hidden />
           {onTitleChange ? 'Сохранено в браузере' : 'Текущий документ сервера'}
         </span>
-        <ModeBadges showTheme={showTemporaryTheme} />
+          <ModeBadges brandbookName={brandbookName} showTheme={showTemporaryTheme} />
         {extra}
         <Button onClick={onExport} className="max-sm:px-3" data-export-trigger>
           <Download />

@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { AppHeader } from '@/components/app/AppHeader'
 import { EASE_OUT_EXPO, fadeUp, lineReveal, stagger } from '@/components/app/motion'
+import { BrandbookField } from './BrandbookField'
 import { SourceTextField } from './SourceTextField'
 import { useSourceFileImport } from './useSourceFileImport'
 import { FileImportError, readSourceFile } from '@/lib/file-import'
@@ -103,6 +104,8 @@ export function CreatePage({
   const savedPresentation = useEditorStore((s) => s.presentation)
   const savedAt = useEditorStore((s) => s.savedAt)
   const closeEditor = useEditorStore((s) => s.close)
+  const [brandbookLoading, setBrandbookLoading] = useState(false)
+  const importing = brandbookLoading
   const [errors, setErrors] = useState<FieldErrors>({})
   const maxTextLength = serverMode ? SOURCE_TEXT_MAX : LIMITS.sourceTextMax
   const { importFile, loading } = useSourceFileImport(async (file, signal) => {
@@ -122,7 +125,8 @@ export function CreatePage({
       if (signal.aborted) return
       setSourceAttachment({ name: file.name, document: source, compare: false })
     } else {
-      const text = (await readSourceFile(file)).trim()
+      const imported = await readSourceFile(file)
+      const text = imported.text.trim()
       if (signal.aborted) return
       if (!text) throw new FileImportError('В файле нет текста.')
       if (text.length > maxTextLength) {
@@ -130,6 +134,9 @@ export function CreatePage({
       }
       setSourceAttachment?.(null)
       setDraft({ text })
+      if (imported.pagesWithoutText.length) {
+        toast.warning('PDF загружен частично', { description: `Страницы без текста: ${imported.pagesWithoutText.slice(0, 8).join(', ')}` })
+      }
     }
     setErrors({})
   })
@@ -146,10 +153,11 @@ export function CreatePage({
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault()
-    if (loading) return
+    if (loading || importing) return
     const text = draft.text.trim()
     const settings = {
       title: draft.title.trim() || undefined,
+      brandbook: draft.brandbook,
       slideCount: draft.slideCount,
     }
     if (!sourceAttachment && text.length > maxTextLength) {
@@ -381,7 +389,7 @@ export function CreatePage({
                 importFile={importFile}
                 loading={loading}
                 maxLength={maxTextLength}
-                acceptPdf={Boolean(readPdfSource)}
+                acceptPdf
                 attachment={sourceAttachment && (
                   <div className="space-y-3 rounded border border-input bg-card p-4">
                     <p className="break-all text-sm">{sourceAttachment.name}</p>
@@ -399,12 +407,14 @@ export function CreatePage({
                 )}
               />
 
+              <BrandbookField value={draft.brandbook} onChange={(brandbook) => setDraft({ brandbook })} loading={brandbookLoading} onLoading={setBrandbookLoading} />
+
               <div className="flex flex-col-reverse gap-4 border-t border-border pt-6 sm:flex-row sm:items-center sm:justify-between">
                 <p className="hidden text-xs text-muted-foreground sm:block">
                   <kbd className="font-sans font-medium text-foreground">Ctrl + Enter</kbd> — создать, не отрывая рук от клавиатуры
                 </p>
                 <Magnetic className="w-full sm:w-auto">
-                  <Button type="submit" size="xl" className="group w-full sm:w-auto" disabled={loading}>
+                  <Button type="submit" size="xl" className="group w-full sm:w-auto" disabled={loading || importing}>
                     Создать презентацию
                     <ArrowRight className="transition-transform duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] group-hover:translate-x-1" />
                   </Button>

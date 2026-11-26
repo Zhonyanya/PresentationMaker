@@ -1,6 +1,7 @@
 import { motion } from 'motion/react'
 import { Copy, Scissors, Trash2 } from 'lucide-react'
 import { EASE_OUT_EXPO } from '@/components/app/motion'
+import type { PresentationTheme } from '@/theme/presentation-theme'
 import type { Slide } from '@/domain/presentation'
 import { getLayout } from '@/layouts/registry'
 import type { FieldDef } from '@/layouts/types'
@@ -17,6 +18,7 @@ import { useSlideActions } from './useSlideActions'
 
 interface InspectorProps {
   slide: Slide
+  colors: PresentationTheme['colors']
   index: number
   total: number
   onFocusField: (field: string | null) => void
@@ -34,7 +36,7 @@ function Section({ title, children, aside }: { title: string; children: React.Re
   )
 }
 
-export function Inspector({ slide, index, total, onFocusField }: InspectorProps) {
+export function Inspector({ slide, colors, index, total, onFocusField }: InspectorProps) {
   const updateSlide = useEditorStore((s) => s.updateSlide)
   const { changeLayout, duplicate, remove, split } = useSlideActions()
   const definition = getLayout(slide.layout)
@@ -50,7 +52,7 @@ export function Inspector({ slide, index, total, onFocusField }: InspectorProps)
 
       <div className="scroll-thin relative min-h-0 flex-1 overflow-y-auto">
         <Section title="Макет">
-          <LayoutPicker value={slide.layout} onChange={(layout) => changeLayout(slide.id, layout)} />
+          <LayoutPicker colors={colors} value={slide.layout} onChange={(layout) => changeLayout(slide.id, layout)} />
         </Section>
         <Separator />
 

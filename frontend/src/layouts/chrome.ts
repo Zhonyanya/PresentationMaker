@@ -1,7 +1,7 @@
 import type { RenderContext } from './types'
 import type { Box, SceneElement, SceneParagraph, SceneText, TextStyle } from './scene'
 import { fitText } from './text-fit'
-import type { FontSizeRange } from '@/theme/presentation-theme'
+import { readableColor, type FontSizeRange } from '@/theme/presentation-theme'
 
 /** Строит текстовый элемент с автоподбором размера шрифта. */
 export function fittedText(params: {
@@ -96,7 +96,7 @@ export function contentChrome(title: string, ctx: RenderContext): SceneElement[]
       placeholder: 'Заголовок слайда',
       style: {
         fontFace: fonts.heading,
-        color: colors.primary,
+        color: readableColor(colors.primary, colors.background),
         bold: true,
         align: 'left',
         valign: 'top',

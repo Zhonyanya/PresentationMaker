@@ -435,7 +435,7 @@ export function ServerEditor({ document, scenes, selected, selectedIndex, accoun
 } & Omit<RevisionPanelProps, 'index' | 'locked' | 'status'>) {
   return (
     <div className="relative flex min-h-dvh flex-col bg-background lg:h-dvh lg:overflow-hidden">
-      <EditorHeader title={document.title} showTemporaryTheme={!document.themeId} onBack={onBack} onExport={() => onExportOpenChange(true)} extra={account} />
+      <EditorHeader brandbookName={document.brandbook?.name} title={document.title} showTemporaryTheme={!document.themeId} onBack={onBack} onExport={() => onExportOpenChange(true)} extra={account} />
       {notice && <div className="shrink-0 border-b border-border px-4 py-3">{notice}</div>}
       <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[236px_minmax(0,1fr)_340px] lg:grid-rows-[minmax(0,1fr)] xl:grid-cols-[244px_minmax(0,1fr)_360px]">
         <div className="min-h-0 max-lg:order-2 lg:contents">

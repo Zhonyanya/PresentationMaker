@@ -1,3 +1,4 @@
+import { readableColor } from '@/theme/presentation-theme'
 import { Rows2 } from 'lucide-react'
 import type { LayoutDefinition } from '../types'
 import { contentWidth, fittedText, lines, logoElement } from '../chrome'
@@ -26,7 +27,7 @@ export const sectionLayout: LayoutDefinition<'section'> = {
           box: { x: spacing.marginX, y: 1.75, w: 3, h: 1.1 },
           paragraphs: [{ text: String(ctx.sectionNumber).padStart(2, '0') }],
           size: typography.sectionNumber,
-          style: { ...base, fontFace: fonts.heading, color: colors.accent, bold: true, valign: 'bottom', lineSpacing: 1 },
+          style: { ...base, fontFace: fonts.heading, color: readableColor(colors.accent, colors.surface), bold: true, valign: 'bottom', lineSpacing: 1 },
         }),
         fittedText({
           field: 'title',
@@ -34,7 +35,7 @@ export const sectionLayout: LayoutDefinition<'section'> = {
           paragraphs: lines(slide.title),
           size: typography.sectionTitle,
           placeholder: 'Название раздела',
-          style: { ...base, fontFace: fonts.heading, color: colors.primary, bold: true, valign: 'top', lineSpacing: 1 },
+          style: { ...base, fontFace: fonts.heading, color: readableColor(colors.primary, colors.surface), bold: true, valign: 'top', lineSpacing: 1 },
         }),
         fittedText({
           field: 'subtitle',

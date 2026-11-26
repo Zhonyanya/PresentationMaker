@@ -1,3 +1,4 @@
+import { readableColor } from '@/theme/presentation-theme'
 import { Columns2 } from 'lucide-react'
 import type { LayoutDefinition } from '../types'
 import type { SceneText } from '../scene'
@@ -83,7 +84,7 @@ export const twoColumnLayout: LayoutDefinition<'two-column'> = {
             paragraphs: lines(slide[key]),
             size: { max: typography.columnHeading, min: 12 },
             placeholder: 'Заголовок колонки',
-            style: { ...bodyStyle, fontFace: fonts.heading, color: colors.accent, bold: true, valign: 'bottom', lineSpacing: 1 },
+            style: { ...bodyStyle, fontFace: fonts.heading, color: readableColor(colors.accent, colors.background), bold: true, valign: 'bottom', lineSpacing: 1 },
           }),
         )
       : []

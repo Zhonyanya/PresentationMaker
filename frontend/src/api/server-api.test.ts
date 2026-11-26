@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import JSZip from 'jszip'
 import { createServerApi } from './server-api'
 import { presentationSchema } from '@/domain/presentation'
-import { buildPptx } from '@/export/pptx-export'
+import { buildPptxBytes } from '@/export/pptx-export'
 
 const id = '11111111-1111-4111-8111-111111111111'
 const document = JSON.parse(readFileSync(new URL('../../../backend/app/ml/fixtures/all-layouts.json', import.meta.url), 'utf8'))
@@ -13,8 +13,8 @@ describe('серверный контракт v1', () => {
   it('общая фикстура Python проходит Zod и экспортируется редактируемым PPTX без мутации', async () => {
     const value = presentationSchema.parse(document)
     const before = JSON.stringify(value)
-    const pptx = await buildPptx(value, { includeNotes: true })
-    const zip = await JSZip.loadAsync(await pptx.write({ outputType: 'nodebuffer' }) as Buffer)
+    const pptx = await buildPptxBytes(value, { includeNotes: true })
+    const zip = await JSZip.loadAsync(pptx)
     for (let n = 1; n <= 6; n++) {
       const xml = await zip.file(`ppt/slides/slide${n}.xml`)!.async('string')
       expect(xml).toContain('<p:txBody>')

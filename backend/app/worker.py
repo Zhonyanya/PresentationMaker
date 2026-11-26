@@ -222,8 +222,9 @@ def call_ml(identifier, attempt, kind, snapshot, deadline):
     deadline = deadline.astimezone(UTC)
     inputs = dict(snapshot, job_id=str(identifier), deadline=deadline.isoformat())
     inputs.pop("themeId", None)
+    inputs.pop("brandbook", None)
     if kind == "revise" and "document" in inputs:
-        inputs["document"] = {key: value for key, value in inputs["document"].items() if key != "themeId"}
+        inputs["document"] = {key: value for key, value in inputs["document"].items() if key not in {"themeId", "brandbook"}}
     payload = json.dumps({"kind": kind, "inputs": inputs}, ensure_ascii=False).encode()
     parent_read, parent_write = os.pipe()
     try:
@@ -420,6 +421,10 @@ def execute_job(identifier: str):
         theme_id = snapshot.get("themeId") if kind == "generate" else snapshot["document"].get("themeId")
         if theme_id is not None:
             document["themeId"] = theme_id
+        document.pop("brandbook", None)
+        brandbook = snapshot.get("brandbook")
+        if brandbook is not None:
+            document["brandbook"] = brandbook
         if kind == "revise":
             validate_revision(snapshot["document"], document, snapshot.get("target_slide_ids"))
         if not advance_phase(identifier, attempt, "saving"):

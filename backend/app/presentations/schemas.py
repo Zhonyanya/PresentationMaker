@@ -205,20 +205,43 @@ Slide = Annotated[
 ThemeId = Literal["urfu"]
 
 
+ReportText = text(60000, 100, trim=True)
+HexColor = Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")]
+FontFamily = Annotated[
+    text(100, 1), StringConstraints(pattern=r"""^[^<>&"'\\\x00-\x1f\x7f\ufffe\uffff]+$""")
+]
+
+
+class Brandbook(Contract):
+    name: text(120, 1, trim=True)
+    primary: HexColor
+    accent: HexColor
+    headingFont: FontFamily | None = None
+    bodyFont: FontFamily | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def optional_fonts_not_null(cls, value):
+        if isinstance(value, dict) and any(
+            value.get(key, "") is None for key in ("headingFont", "bodyFont")
+        ):
+            raise ValueError("Optional fonts must be absent or strings")
+        return value
+
+
 class Document(Contract):
     """Полный документ шести допустимых макетов, общий для хранения и браузерного вывода."""
 
     title: text(200)
+    brandbook: Brandbook | None = None
     themeId: ThemeId | None = None
     slides: Annotated[list[Slide], Field(min_length=1, max_length=60)]
-
-
-ReportText = text(60000, 100, trim=True)
 
 
 class GenerateRequest(Contract):
     """Запрос генерации с обязательным желаемым slideCount, а не числом по умолчанию."""
 
+    brandbook: Brandbook | None = None
     title: text(200, trim=True) | None = None
     text: ReportText | None = None
     source: SourceInput | None = None
@@ -229,7 +252,7 @@ class GenerateRequest(Contract):
     @model_validator(mode="before")
     @classmethod
     def optional_settings_not_null(cls, value):
-        if isinstance(value, dict) and any(key in value and value[key] is None for key in ("title", "themeId")):
+        if isinstance(value, dict) and any(key in value and value[key] is None for key in ("title", "themeId", "brandbook")):
             raise ValueError("Optional settings must be absent, not null")
         return value
 

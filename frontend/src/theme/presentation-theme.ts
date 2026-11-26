@@ -1,3 +1,5 @@
+import type { Brandbook } from '@/domain/brandbook'
+
 /**
  * КОРПОРАТИВНАЯ ТЕМА ПРЕЗЕНТАЦИЙ
  * ==============================
@@ -172,4 +174,41 @@ export const presentationTheme: PresentationTheme = {
     text: '',
     showSlideNumber: true,
   },
+}
+
+function luminance(hex: string) {
+  const [r, g, b] = [1, 3, 5].map((i) => {
+    const srgb = parseInt(hex.slice(i, i + 2), 16) / 255
+    return srgb <= 0.04045 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+/** Сохраняет фирменный цвет текста, если он читается на данном фоне. */
+export function readableColor(preferred: string, background: string) {
+  const fg = luminance(preferred)
+  const bg = luminance(background)
+  if ((Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05) >= 4.5) return preferred
+  return bg > 0.179 ? '#000000' : '#FFFFFF'
+}
+
+export function themeFor(brandbook?: Brandbook): PresentationTheme {
+  if (!brandbook) return presentationTheme
+  const { name, primary, accent, headingFont, bodyFont } = brandbook
+  const onPrimary = readableColor('#FFFFFF', primary)
+  return {
+    ...presentationTheme,
+    id: 'brandbook',
+    name,
+    colors: {
+      ...presentationTheme.colors, primary, accent,
+      textOnPrimary: onPrimary, textOnPrimaryMuted: onPrimary,
+      accentOnPrimary: readableColor(accent, primary),
+    },
+    fonts: {
+      ...presentationTheme.fonts,
+      heading: headingFont ?? presentationTheme.fonts.heading,
+      body: bodyFont ?? presentationTheme.fonts.body,
+    },
+  }
 }

@@ -58,7 +58,8 @@ export function createMockApi(config: MockApiConfig = {}): PresentationApi {
       // Ответ mock-генератора проходит ту же проверку, что и ответ сервера
       const parsed = generateResponseSchema.safeParse(response)
       if (!parsed.success) throw new ApiError('invalid_response', { details: parsed.error.issues })
-      return normalizeGenerated(parsed.data)
+      const presentation = normalizeGenerated(parsed.data)
+      return parsedRequest.data.brandbook ? { ...presentation, brandbook: parsedRequest.data.brandbook } : presentation
     },
   }
 }

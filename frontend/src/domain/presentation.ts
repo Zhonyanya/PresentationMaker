@@ -1,3 +1,4 @@
+import { brandbookSchema } from './brandbook'
 import { z } from 'zod'
 
 /**
@@ -157,6 +158,7 @@ export const presentationSchema = z
   .object({
     title: text(LIMITS.titleMax),
     themeId: themeIdSchema.optional(),
+    brandbook: brandbookSchema.optional(),
     slides: z.array(slideSchema).min(1).max(60),
   })
   .refine((p) => new Set(p.slides.map((s) => s.id)).size === p.slides.length, { message: 'ID слайдов должны быть уникальными', path: ['slides'] })
@@ -182,6 +184,7 @@ export const SLIDE_LAYOUTS = slideSchema.options.map(
 /* ------------------------------------------------------------------ */
 
 export const generateRequestSchema = z.object({
+  brandbook: brandbookSchema.optional(),
   text: z
     .string()
     .trim()

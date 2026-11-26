@@ -115,7 +115,7 @@ function Workspace() {
   const userRef = useRef<ServerUser | null>(null)
   const submission = useRef<{ signature: string; key: string } | null>(null)
   const selected = useEditorStore(selectSelectedSlide)
-  const scenes = usePresentationScenes(current?.document?.slides ?? [], current?.document?.themeId)
+  const scenes = usePresentationScenes(current?.document?.slides ?? [], current?.document?.themeId, current?.document?.brandbook)
 
   const clearPrivate = useCallback(() => {
     epoch.current++
@@ -131,8 +131,11 @@ function Workspace() {
 
   const applyCurrent = useCallback((value: CurrentPresentation) => {
     setCurrent(value)
-    if (value.document) useEditorStore.getState().load(value.document)
-    else useEditorStore.getState().close()
+    if (value.document) {
+      useEditorStore.getState().load(value.document)
+      const { draft, setDraft } = useFlowStore.getState()
+      if (!draft.text) setDraft({ brandbook: value.document.brandbook })
+    } else useEditorStore.getState().close()
   }, [])
 
   const restore = useCallback(async (account: ServerUser, activeEpoch: number) => {

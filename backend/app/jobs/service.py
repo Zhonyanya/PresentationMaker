@@ -151,8 +151,11 @@ async def submit(db: AsyncSession, owner: UUID, key: str, body, identifier: UUID
         targets = body.target_slide_numbers
         if targets and max(targets) > presentation.slide_count:
             raise AppError(422, "INVALID_TARGET_SLIDES", "Номер слайда вне текущей презентации.")
+        content = presentation.document.copy()
+        brandbook = content.pop("brandbook", None)
         snapshot = {
-            "document": presentation.document,
+            "document": content,
+            **({"brandbook": brandbook} if brandbook else {}),
             "text": presentation.source_text,
             "slideCount": presentation.requested_slide_count,
             "instruction": body.instruction,
