@@ -146,7 +146,7 @@ _INDEX_CAPTION = re.compile(
     r'^[ \t]*[^\[\]\n]{3,96}\[[A-Z]{2,8}\d{3,8}(?:,\s*[A-Z]{2,8}\d{3,8}){0,3}\]',
     re.M,
 )
-_TABLE_CAPTION = re.compile(r'^[ \t]*таблица[ \t]*(?:№[ \t]*)?(\d+)\b', re.I | re.M)
+_TABLE_CAPTION = re.compile(r'^[ \t]*таблица[ \t]*(?:№[ \t]*)?(\d+(?:\.\d+)*)\b', re.I | re.M)
 _RULED_TABLE_CAPTION = re.compile(r'\b(?:таблица|table)\s*(?:№\s*)?(\d+)\s*:', re.I)
 _SUPERSCRIPT = str.maketrans('0123456789+-−', '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻')
 _SUBSCRIPT = str.maketrans('0123456789+-−', '₀₁₂₃₄₅₆₇₈₉₊₋₋')

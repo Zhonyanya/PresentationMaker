@@ -16,6 +16,7 @@ from .deck_plan import (
     apply_referenced_charts,
     apply_referenced_equations,
     apply_referenced_figures,
+    restore_mixed_source_visual,
     apply_referenced_tables,
     complete_plan,
     merge_intents,
@@ -552,6 +553,7 @@ def _generate(
         plan = apply_referenced_charts(document, source, rendered_charts, max_slides=target_count, plan=plan)
         apply_referenced_equations(document, source, plan)
         apply_referenced_figures(document, source, plan)
+        plan = restore_mixed_source_visual(document, source, target_count, plan)
     return GeneratedDeck(document, plan)
 
 

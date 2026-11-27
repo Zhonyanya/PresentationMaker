@@ -933,6 +933,57 @@ def apply_referenced_figures(document: dict, source: SourceDocument, plan: DeckP
             used.add(identifier)
 
 
+def restore_mixed_source_visual(document: dict, source: SourceDocument, limit: int,
+                                plan: DeckPlan | None) -> DeckPlan | None:
+    """Restore one unambiguous missing source visual without exceeding the slide budget."""
+    slides = document['slides']
+    if len(slides) >= limit or not any(
+        slide.get('composition', {}).get('kind') == 'comparison' for slide in slides
+    ):
+        return plan
+    image_pages = {material['page'] for slide in slides
+                   if (material := slide.get('sourceMaterial', {})).get('kind') == 'image'}
+    has_table = any(slide.get('sourceMaterial', {}).get('kind') == 'table' for slide in slides)
+    if not image_pages and has_table:
+        figures = [
+            block for block in source.blocks
+            if isinstance(block, IllustrationBlock) and block.png and block.page is not None
+            and RASTER_FIGURE_NUMBER.match(block.caption)
+        ]
+        if len(figures) != 1:
+            return plan
+        block, = figures
+        kind = 'figure'
+        title = block.caption[:200].strip()
+        material = {'kind': 'image', 'page': block.page, 'png': block.png}
+    elif len(image_pages) == 1 and not has_table:
+        tables = [
+            (block, material) for block in source.blocks
+            if isinstance(block, TableBlock) and block.page in image_pages and block.number
+            and not chart_caption_number(block.caption) and (material := _table_material(block)) is not None
+        ]
+        if len(tables) != 1:
+            return plan
+        (block, table_material), = tables
+        kind = 'table'
+        title = f'Таблица {block.number} из исходного доклада'
+        material = table_material.model_dump(mode='json', exclude_none=True)
+    else:
+        return plan
+    identifier = slides[-1]['id'] + '-source-' + kind
+    if any(slide['id'] == identifier for slide in slides):
+        return plan
+    slides.insert(-1, {
+        'id': identifier, 'layout': 'text', 'title': title, 'body': '',
+        'notes': f'Исходный PDF, стр. {block.page}.', 'sourceMaterial': material,
+    })
+    if plan is None:
+        return None
+    evidence = EvidenceAddress(block.id, block.id, page=block.page)
+    item = PlannedSlide(identifier, (SlideIntent(title, '', (evidence,), title, kind),))
+    return DeckPlan(plan.slides[:-1] + (item,) + plan.slides[-1:])
+
+
 def apply_plan_compositions(
     document: dict, plan: DeckPlan, facts: list[dict], source: SourceDocument,
 ) -> set[str]:

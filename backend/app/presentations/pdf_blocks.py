@@ -1,7 +1,10 @@
 """Adapt extracted PDF pages to the common source document."""
 
 from base64 import b64encode
+from io import BytesIO
 from typing import BinaryIO
+
+from PIL import Image
 
 from app.presentations.source_blocks import (
     SOURCE_ADAPTER,
@@ -14,6 +17,22 @@ from app.presentations.source_blocks import (
 from .pdf_source import SourcePage, SourceParagraph, _contains, read_pdf, reading_regions, render_pdf_region
 from .pdf_vector_charts import chart_caption_number
 from .prose_tables import with_parallel_tables
+
+
+def _fit_png(png: bytes, limit: int) -> str | None:
+    prefix = 'data:image/png;base64,'
+    if len(png) <= (limit - len(prefix)) // 4 * 3:
+        return prefix + b64encode(png).decode('ascii')
+    with Image.open(BytesIO(png)) as source:
+        image = source.convert('RGB')
+    for scale in (1, 0.8, 0.65, 0.5):
+        size = tuple(max(1, round(dimension * scale)) for dimension in image.size)
+        resized = image.resize(size, Image.Resampling.LANCZOS) if scale < 1 else image
+        output = BytesIO()
+        resized.quantize(colors=256).save(output, format='PNG', optimize=True)
+        if output.tell() <= (limit - len(prefix)) // 4 * 3:
+            return prefix + b64encode(output.getvalue()).decode('ascii')
+    return None
 
 
 def read_pdf_source(source: BinaryIO) -> SourceDocument:
@@ -37,11 +56,10 @@ def read_pdf_source(source: BinaryIO) -> SourceDocument:
                 break
             source.seek(0)
             try:
-                png = render_pdf_region(source, page_number, bounds)
+                data = _fit_png(render_pdf_region(source, page_number, bounds), min(120_000, remaining))
             except (ValueError, OSError):
                 continue
-            data = 'data:image/png;base64,' + b64encode(png).decode('ascii')
-            if len(data) <= min(120_000, remaining):
+            if data is not None:
                 images[page_number, bounds] = data
                 remaining -= len(data)
     document = with_parallel_tables(pdf_blocks(pages, images))
